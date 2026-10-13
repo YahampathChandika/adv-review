@@ -1,0 +1,12 @@
+{
+  "name": "yahampathchandika",
+  "description": "Plugins by Yahampath Chandika: adv-review, an adversarial pull-request review for Claude Code.",
+  "owner": { "name": "Yahampath Chandika", "url": "https://github.com/YahampathChandika" },
+  "plugins": [
+    {
+      "name": "adv-review",
+      "source": "./",
+      "description": "Adversarial pull-request review: every finding has to survive a skeptic told to refute it."
+    }
+  ]
+}

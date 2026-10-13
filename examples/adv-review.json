@@ -1,0 +1,22 @@
+{
+  "$comment": "Copy to .claude/adv-review.json at your repository root. Every key is optional; the README explains each.",
+  "install": "pnpm install --frozen-lockfile --offline --ignore-scripts",
+  "checks": "pnpm turbo run typecheck test --output-logs=errors-only",
+  "isolate": "npx vitest run --pool=forks --poolOptions.forks.singleFork=true <file>",
+  "agents": 30,
+  "model": "opus",
+  "angles": [
+    {
+      "title": "write-boundary",
+      "brief": "Keys that get silently dropped. The section validator strips any key the schema does not declare, so a mapper, prefill payload or default that writes an undeclared key looks like it worked and stores nothing. Check every value written in this diff against the schema of the record it targets. Check the reverse too: a field declared but never written, or written under a name the reader does not read back."
+    },
+    {
+      "title": "cross-tenant-reach",
+      "brief": "WHICH tenant's data can this code read? Uploaded files are scoped to the account, not the project, so a query that filters on the account alone reads documents uploaded for a different project of the same account. For every new or widened read, name the other project whose record satisfies it, and say which field that value lands in. Check the same for any code handed the whole pool."
+    },
+    {
+      "title": "answers-the-input-does-not-support",
+      "brief": "A write that claims more than its input says: a mapper that ignores its input and answers Yes from a record every field of which came back empty; a non-atomic write that lands half a statement beside a stored No; a rule that answers a question about one person from a document about another. For each new mapping ask what the input actually proves, then build the stored state that contradicts it and run it."
+    }
+  ]
+}
