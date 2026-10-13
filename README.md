@@ -34,7 +34,12 @@ would otherwise read three times.
 
 The result names every finding's severity, file and line, who found it, who checked
 it, at which commit, and whether it was confirmed cleanly or only after a skeptic
-corrected or downgraded it. Refuted findings are returned too, with the reason.
+corrected or downgraded it. It says whether the PR introduced each defect or it was
+already on the base commit; pre-existing findings are reported apart and left out of
+the posted comment unless you ask. Refuted findings are returned too, with the reason,
+and those killed for doubt alone — nobody showed them false, every skeptic was unsure
+— are marked so a person can glance at them. An agent that dies mid-run is run once
+more while the ceiling has room.
 
 ## The angles
 
@@ -86,6 +91,8 @@ From a session in the repository, on the PR's branch or any other:
 /adv-review:review 140 --agents 30 raise the ceiling for a large PR
 /adv-review:review 140 --no-run    read the code, execute nothing
 /adv-review:review 140 --post      post the summary comment without asking
+/adv-review:review 140 --out r.json  also write the result JSON to a file
+/adv-review:review 140 --include-preexisting   post pre-existing findings too
 ```
 
 The first run asks you to allow the workflow and shows its phases. The run then goes
@@ -98,10 +105,12 @@ nothing is posted, committed or pushed without your yes.
 
 `--agents` is the most a run may spend, not a quota. A small PR stops at six or seven
 agents; a large one reaches the ceiling. About 30% is held back so that what the
-finders find can be verified. When the ceiling is too low to run every angle the scout
-kept, the run says which it cut, names the ceiling that would have run them, and
-reports itself **incomplete** — it never reports partial coverage as complete. Below 20
-you will usually cut something; raise it for a project with many angles of its own.
+finders find can be verified. Given no number, the run takes the smallest ceiling with
+room for every fixed angle and two of the scout's own — 20 for the generic eight, more
+for a project with angles of its own — and logs what it chose. When a ceiling you gave
+is too low to run every angle the scout kept, the run says which it cut, names the
+ceiling that would have run them, and reports itself **incomplete** — it never reports
+partial coverage as complete.
 
 ## Configure a project
 
@@ -132,7 +141,7 @@ Add `.claude/adv-review.json` at the repository root. Every key is optional.
 | `install` | How to install dependencies in a fresh worktree. Agents run it before running anything. Omitted, they work it out from the lockfile and README. |
 | `checks` | The project's typecheck/lint/test command. The scout runs it on the PR's head; a failure in code the diff touches becomes a finding and is verified like any other. Omitted, the scout looks for the project's own scripts. |
 | `isolate` | How to re-run one test file alone; `<file>` is replaced. A failure that passes alone is reported as load-induced, not as the PR's. |
-| `agents` | The default ceiling for this project, used when `--agents` is not given. |
+| `agents` | The default ceiling for this project, used when `--agents` is not given. Omitted too, the run computes one that fits the project's angles. |
 | `model` | The subagents' model. `opus` by default. |
 | `angles` | The project's own angles: `title` (kebab-case) and `brief`. A brief is a *failure shape and where to look*, not a conclusion — tell the finder to build the input that makes it bite and run it. A project angle with the same title as a generic one replaces it. |
 

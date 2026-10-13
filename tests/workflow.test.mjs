@@ -437,6 +437,7 @@ test('the scout’s failing checks become findings, and go through refutation', 
   assert.equal(result.confirmed.length, 1)
   assert.equal(result.confirmed[0].category, 'baseline-check')
   assert.deepEqual(result.confirmed[0].foundBy, ['baseline-checks'])
+  assert.equal(result.confirmed[0].preexisting, false)
 })
 
 test("the project's own angles are listed to the scout, pinned, and may replace a generic brief", async () => {
@@ -615,4 +616,185 @@ test('the critic is told what the scout ruled out, and why — a wrong drop is o
   const critic = calls.find((c) => c.label === 'critic')
   assert.match(critic.prompt, /The scout ruled these out/)
   assert.match(critic.prompt, /- migrations-and-rollout: no migration file in the diff/)
+})
+
+// ---------------------------------------------------------------------------
+// 0.2.0 — the report says whose defect it is, what was dismissed for doubt
+// alone, an agent that dies gets one more go, and the ceiling fits the angles.
+// ---------------------------------------------------------------------------
+test('a finding says whether the diff introduced it, and the report keeps that apart', async () => {
+  const { result, calls } = await run(base({ agents: 20 }), {
+    ...scoutKeeping('correctness'),
+    ...findersReturning({
+      correctness: [
+        finding({ severity: 'low', introducedByDiff: true }),
+        finding({ file: 'src/old.ts', severity: 'low', introducedByDiff: false }),
+      ],
+    }),
+    triage: (p) => ({ clusters: idsIn(p).map((id) => ({ ids: [id], rootCause: id })) }),
+  })
+  for (const c of calls.filter((c) => c.label.startsWith('find:'))) assert.match(c.prompt, /introducedByDiff/)
+  const byFile = Object.fromEntries(result.confirmed.map((f) => [f.file, f.preexisting]))
+  assert.deepEqual(byFile, { 'src/a.ts': false, 'src/old.ts': true })
+  assert.equal(result.counts.preexisting, 1)
+  // Triage and the skeptics are told which is which.
+  assert.match(calls.find((c) => c.label === 'triage').prompt, /src\/old\.ts.*pre-existing/)
+  const claims = calls.filter((c) => c.label.startsWith('refute')).map((c) => c.prompt).join('\n')
+  assert.match(claims, /the finder says: pre-existing/)
+  assert.match(claims, /the finder says: introduced by this diff/)
+})
+
+test('a finding that does not say is taken as introduced; a skeptic may correct either way', async () => {
+  const silent = await run(base({ agents: 8 }), {
+    ...scoutKeeping('correctness'),
+    ...findersReturning({ correctness: [finding({ severity: 'low' })] }),
+  })
+  assert.equal(silent.result.confirmed[0].preexisting, false)
+  const corrected = await run(base({ agents: 8 }), {
+    ...scoutKeeping('correctness'),
+    ...findersReturning({ correctness: [finding({ severity: 'low', introducedByDiff: true })] }),
+    refute: () => ({
+      verdicts: [{ index: 0, refuted: false, confidence: 'certain', reasoning: 'real, but on main too', correctedIntroducedByDiff: false }],
+    }),
+  })
+  assert.equal(corrected.result.confirmed[0].preexisting, true)
+  assert.equal(corrected.result.confirmed[0].corrected, true)
+  assert.equal(corrected.result.counts.corrected, 1)
+  assert.equal(corrected.result.counts.preexisting, 1)
+})
+
+test('a root cause is pre-existing only if every report of it says so', async () => {
+  const { result } = await run(base({ agents: 20 }), {
+    ...scoutKeeping('correctness', 'security'),
+    ...findersReturning({
+      correctness: [finding({ severity: 'low', introducedByDiff: false })],
+      security: [finding({ file: 'src/b.ts', severity: 'low', introducedByDiff: true })],
+    }),
+    triage: (p) => ({ clusters: [{ ids: idsIn(p), rootCause: 'one defect, seen twice' }] }),
+  })
+  assert.equal(result.confirmed.length, 1)
+  assert.equal(result.confirmed[0].preexisting, false)
+})
+
+test('a finding killed for doubt alone is marked dismissed as unsure', async () => {
+  const one = findersReturning({ correctness: [finding({ severity: 'low' })] })
+  const unsure = await run(base({ agents: 8 }), {
+    ...scoutKeeping('correctness'),
+    ...one,
+    refute: () => ({ verdicts: [{ index: 0, refuted: true, confidence: 'unsure', reasoning: 'could not tell' }] }),
+  })
+  assert.equal(unsure.result.refuted[0].dismissedAsUnsure, true)
+  assert.equal(unsure.result.counts.dismissedAsUnsure, 1)
+  const certain = await run(base({ agents: 8 }), {
+    ...scoutKeeping('correctness'),
+    ...one,
+    refute: () => ({ verdicts: [{ index: 0, refuted: true, confidence: 'certain', reasoning: 'the guard at :12' }] }),
+  })
+  assert.equal(certain.result.refuted[0].dismissedAsUnsure, false)
+  assert.equal(certain.result.counts.dismissedAsUnsure, 0)
+  // A panel where one refuter was sure: not dismissed for doubt alone.
+  const panel = await run(base({ agents: 20 }), {
+    ...findersReturning({ correctness: [finding({ severity: 'high' })] }),
+    refute: (_p, opts) => {
+      const lens = Number(opts.label.split('.').pop())
+      const v = { 1: { refuted: true, confidence: 'unsure' }, 2: { refuted: true, confidence: 'certain' }, 3: { refuted: false, confidence: 'certain' } }[lens]
+      return { verdicts: [{ index: 0, ...v, reasoning: 'lens' }] }
+    },
+  })
+  assert.equal(panel.result.refuted.length, 1)
+  assert.equal(panel.result.refuted[0].dismissedAsUnsure, false)
+})
+
+test('an agent that dies is retried once, while the ceiling has room', async () => {
+  let deaths = 0
+  const { result, calls, logs } = await run(base({ agents: 20 }), {
+    ...scoutKeeping('correctness', 'security'),
+    find: (_p, opts) => {
+      if (opts.label === 'find:correctness' && deaths++ === 0) return new Error('No response from API')
+      return { findings: opts.label === 'find:correctness' ? [finding({ severity: 'low' })] : [] }
+    },
+  })
+  assert.equal(result.status, 'complete')
+  assert.deepEqual(result.failedAngles, [])
+  assert.deepEqual(result.retried, ['find:correctness'])
+  assert.equal(result.budget.retries, 1)
+  assert.equal(result.budget.used, calls.length, 'a retry is an agent spent')
+  assert.equal(calls.filter((c) => c.label === 'find:correctness').length, 2)
+  assert.ok(logs.some((l) => /find:correctness returned nothing — retrying once/.test(l)))
+  assert.equal(result.confirmed.length, 1)
+})
+
+test('a retry that also fails leaves the angle lost, and nothing is retried twice', async () => {
+  const { result, calls } = await run(base({ agents: 20 }), {
+    ...scoutKeeping('correctness', 'security'),
+    find: (_p, opts) => (opts.label === 'find:correctness' ? new Error('died') : { findings: [] }),
+  })
+  assert.deepEqual(result.failedAngles, ['correctness'])
+  assert.equal(result.status, 'incomplete')
+  assert.equal(calls.filter((c) => c.label === 'find:correctness').length, 2)
+  assert.deepEqual(result.retried, ['find:correctness'])
+})
+
+test('no retry when the ceiling has no room for one — and the ceiling holds', async () => {
+  // Four agents: scout, one finder, one skeptic, critic (one finding, so no
+  // triage). The skeptic dies with only the critic's slot left, so it is not
+  // retried, and its claim comes back unverified rather than the run spending
+  // a fifth agent.
+  const { result, calls } = await run(base({ agents: 4 }), {
+    ...scoutKeeping('correctness'),
+    ...findersReturning({ correctness: [finding({ severity: 'low' })] }),
+    refute: () => new Error('died'),
+  })
+  assert.ok(calls.length <= 4, `spawned ${calls.length}`)
+  assert.equal(calls.filter((c) => c.label.startsWith('refute')).length, 1)
+  assert.equal(result.unverified.length, 1)
+  assert.deepEqual(result.retried, [])
+  // Whatever dies, the ceiling is never exceeded.
+  for (const agents of [4, 6, 8, 12]) {
+    const dying = await run(base({ agents }), {
+      find: () => new Error('died'),
+      refute: () => new Error('died'),
+      critic: () => new Error('died'),
+    })
+    assert.ok(dying.calls.length <= agents, `agents=${agents} spawned ${dying.calls.length}`)
+    assert.equal(dying.result.budget.used, dying.calls.length)
+  }
+})
+
+test('an answer about the wrong commit is retried once; a good second answer clears the discard', async () => {
+  const MAIN = 'aac8d53'
+  let first = true
+  const { result } = await run(base({ agents: 8 }), {
+    ...scoutKeeping('correctness'),
+    find: () => {
+      if (first) {
+        first = false
+        return { reviewedCommit: MAIN, findings: [finding({ severity: 'low' })] }
+      }
+      return { findings: [finding({ severity: 'low' })] }
+    },
+  })
+  assert.equal(result.status, 'complete')
+  assert.equal(result.confirmed.length, 1)
+  assert.deepEqual(result.retried, ['find:correctness'])
+  assert.ok(!result.incomplete.some((r) => /wrong commit/.test(r)))
+})
+
+test('with no ceiling given, the run takes one that fits every fixed angle, never under 20', async () => {
+  const bare = await run({ prs: [1], title: 'A PR', diffs: [DIFF], headSha: SHA })
+  assert.equal(bare.result.budget.ceiling, 20)
+  assert.ok(bare.logs.some((l) => /no ceiling given — 20 agents/.test(l)))
+  assert.deepEqual(bare.result.notRun, [])
+  const angles = Array.from({ length: 10 }, (_, k) => ({ title: `own-${k + 1}`, brief: 'look here' }))
+  const many = await run({ prs: [1], title: 'A PR', diffs: [DIFF], headSha: SHA, project: { angles } })
+  // 10 project + 8 generic + 2 of the scout's = 20 finders; the smallest
+  // ceiling that leaves room for them once 30% is held back.
+  assert.equal(many.result.budget.ceiling, 31)
+  assert.equal(many.result.status, 'complete')
+  assert.deepEqual(many.result.notRun, [])
+  assert.equal(many.result.angles.length, 18)
+  // A ceiling given is a ceiling, as before.
+  const given = await run({ prs: [1], title: 'A PR', diffs: [DIFF], headSha: SHA, agents: 20, project: { angles } })
+  assert.equal(given.result.budget.ceiling, 20)
+  assert.equal(given.result.status, 'incomplete')
 })

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — 0.2.0
+
+- Every finding says whether the PR introduced the defect or it was already on the base
+  commit (`introducedByDiff` from the finders, correctable by a skeptic; `preexisting` in
+  the result). Pre-existing findings are reported apart and left out of the posted
+  comment unless `--include-preexisting` is passed.
+- A refuted finding that nobody showed false, where every skeptic was unsure, is marked
+  `dismissedAsUnsure` and listed for a person to glance at.
+- An agent that dies, or that answers about the wrong commit, is retried once while the
+  ceiling has room. A retry is an agent spent; the result lists `retried`.
+- Given no `--agents`, the run computes the smallest ceiling with room for every fixed
+  angle and two of the scout's own, never under 20.
+- `--out <path>` writes the run's result JSON to a file.
+
 ## 0.1.0 — 2026-10-13
 
 First public release.

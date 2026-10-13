@@ -30,9 +30,11 @@ every PR's diff goes in, and the agents read the tip's commit, which carries the
 Only for stacks — two PRs that are merely related are two separate reviews.
 `/adv-review:review 140` where 140 is stacked on an open 136 — 140's changes only; 136
 is out of scope (pass `stackedOn: 136`) and gets its own review.
-`--agents N` — the MOST agents the review may use (default 20, or the project's
-`agents`; see §3).
+`--agents N` — the MOST agents the review may use (see §3 for the default).
 `--post` — post the summary without asking at the end (see §6).
+`--include-preexisting` — post pre-existing findings too (see §5).
+`--out <path>` — also write the run's result JSON to this file, for the calibration
+scorer or the user's own tooling.
 `--no-run` — agents read the code but execute none of it (see Notes).
 
 Resolve with `gh`. With no number, `gh pr view --json number` on the current branch.
@@ -81,7 +83,9 @@ each critical or high root cause while the ceiling allows, and the critic. A thr
 PR might use six agents; a 5,000-line one reaches the ceiling.
 
 The order of precedence for the ceiling: `--agents` on the command, then the project
-config's `agents`, then 20.
+config's `agents`, then none — the script then takes the smallest ceiling with room for
+every fixed angle (the project's own and the generic eight) and two of the scout's,
+never under 20, and logs what it chose.
 
 Where the ceiling is lower than the PR needs:
 - About 30% of the ceiling is held back for triage and verification before finders are
@@ -95,9 +99,12 @@ Where the ceiling is lower than the PR needs:
   named, lowest severity first.
 
 Nobody here can see the user's plan usage — not you, not the script. The user sets the
-ceiling: lower it when usage is running low, raise it for a large or risky PR, or for a
-project with many angles of its own (eight generic angles plus the project's need
-roughly `(angles + 2) / 0.7 + 2` agents to all run). Do not choose a number for them.
+ceiling: lower it when usage is running low, raise it for a large or risky PR. Do not
+choose a number for them; when they give none, pass none and let the script compute it.
+
+An agent that dies, or that answers about the wrong commit, is run once more while the
+ceiling has room for it and still for the critic. A retry is an agent spent, and the
+result lists every agent retried in `retried`.
 
 A run that loses an agent part-way — to the session limit, or to an API call that never
 answered — comes back `incomplete`, with the dead agents named. Resume it once the cause
@@ -115,7 +122,7 @@ The workflow ships with this plugin as `adv-review:adversarial`. Launch it by na
 Workflow({
   name: 'adv-review:adversarial',
   args: { prs: [137], title: '…', intent: '…', diffs: ['/abs/path/pr-137.diff'],
-          agents: 20, headSha: '<137 headRefOid>',
+          headSha: '<137 headRefOid>',        // agents: N only when the user gave one
           project: { /* the contents of .claude/adv-review.json, if any */ } }
 })
 // A whole stack, as one body of work:
@@ -129,9 +136,9 @@ Workflow({
 If the runtime does not resolve the name, pass the script's path instead:
 `scriptPath: '${CLAUDE_PLUGIN_ROOT}/workflows/adversarial.js'`.
 
-`args` must be a real JSON object. `agents` a whole number (or a numeric string),
-`headSha` the head commit from §2, and `project` an object with the shape the README
-gives; a bad value of any of these stops the run before any agent starts.
+`args` must be a real JSON object. `agents`, when given, a whole number (or a numeric
+string), `headSha` the head commit from §2, and `project` an object with the shape the
+README gives; a bad value of any of these stops the run before any agent starts.
 Add `run: false` for `--no-run`, and `model` only to override Opus (the project config's
 `model`, if set, is the override to pass).
 
@@ -145,10 +152,16 @@ The result is:
 ```
 { status: 'complete' | 'incomplete', incomplete: [reasons],
   headSha, confirmed, refuted, unverified, missed,
-  counts: { raw, rootCauses, confirmed, plausible, corrected, downgraded, refuted, unverified },
-  budget: { ceiling, used, scout, finders, triage, skeptics, critic },
-  angles, projectAngles, droppedAngles, notRun, failedAngles, baseline, scoutNotes }
+  counts: { raw, rootCauses, confirmed, plausible, corrected, downgraded, preexisting,
+            refuted, dismissedAsUnsure, unverified },
+  budget: { ceiling, used, scout, finders, triage, skeptics, critic, retries },
+  angles, projectAngles, droppedAngles, notRun, failedAngles, retried, baseline, scoutNotes }
 ```
+
+Every finding carries `preexisting`: true when the finders, or a skeptic correcting
+them, say the defect exists on the base commit and this diff only touches it. Every
+refuted finding carries `dismissedAsUnsure`: true when nobody showed it false and every
+skeptic that refuted it was unsure.
 
 and the tool result also carries the run's `logs`.
 
@@ -156,7 +169,9 @@ and the tool result also carries the run's `logs`.
 incomplete run is never reported as clean, and `missed: null` means the critic did not
 run: coverage is unknown, not complete.
 
-Report `confirmed`, most severe first. If a `ReportFindings` tool is available, use it
+Report `confirmed` in two parts, each most severe first: the findings this PR
+introduced, then — in their own short section, headed as pre-existing and not the
+author's doing — those with `preexisting` set. If a `ReportFindings` tool is available, use it
 — each finding with `file`, `line`, a one-sentence `summary`, and the `failure_scenario`
 the skeptics could not refute — and do not also print the findings as prose. Without
 that tool, print one table: severity, `file:line`, summary, the failure. Either way:
@@ -166,12 +181,18 @@ confidence and `PLAUSIBLE` where a panel split 2–1 or a skeptic was unsure; a 
 with several `sites` is one defect in several places — say so in its summary.
 
 Then, in a few lines:
-- the budget: "used X of N" and why, from `budget` and the logs;
+- the budget: "used X of N" and why, from `budget` and the logs, and which agents were
+  retried;
 - the angles run, and any the scout dropped or the ceiling cut;
 - the verification: how many root causes were refuted, and how many upheld only after
   correction or a downgrade — a downgrade is not a clean confirmation;
+- one line for the findings dismissed for doubt alone (`dismissedAsUnsure`), by file and
+  title: not confirmed, not disproved, for a person to glance at;
 - everything in `unverified` and `missed`, for a person to check by hand. Neither has
   survived a refutation, and neither may be presented as if it had.
+
+With `--out <path>`, write the whole result object to that file as JSON before
+reporting.
 
 ## 6. After the report
 
@@ -196,6 +217,8 @@ Then, in a few lines:
 2. **Ask whether to post** — one summary comment (`gh pr comment`) or inline comments.
    Post only on the user's yes for THIS review, or when they passed `--post`. A posted
    comment names the head commit it reviewed (`headSha`), and flags anything unverified.
+   It leaves pre-existing findings out unless the user passed `--include-preexisting`:
+   a PR comment is read as a verdict on the author's change.
 3. Never commit, push or open a fix from this skill. A review ends at the report.
 
 ## Notes
