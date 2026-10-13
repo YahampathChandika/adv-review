@@ -63,7 +63,11 @@ matches a planted defect when one of its sites is in the same file within five l
 A finding the review marks pre-existing (on the base commit, not introduced by the PR)
 is listed and left out of precision: the planted defects are all introduced by their
 PR, and a true finding about `main` is not a false positive. What remains unmatched is
-listed under *to adjudicate*; a true one goes into `known`, a false one counts.
+listed under *to adjudicate* and counts as false until a person rules on it: a true
+finding about `main` goes into `known`; a true finding about the PR that nobody
+planted, or a false one, goes into `adjudicated` with its PR, site and `truth`, and
+the reasoning in `note`. Unknown is not true, so an unadjudicated finding lowers
+precision.
 
 ## What the numbers mean
 

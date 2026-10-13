@@ -20,7 +20,7 @@ const label = (f) => `${f.file}:${f.line} ${f.title} [${f.severity}]`
  */
 export function score({ manifest, results, heads = {}, window = 5 }) {
   const rows = []
-  const totals = { reviewed: 0, planted: 0, found: 0, wronglyRefuted: 0, missed: 0, confirmed: 0, preexisting: 0, known: 0, unplanned: 0 }
+  const totals = { reviewed: 0, planted: 0, found: 0, wronglyRefuted: 0, missed: 0, confirmed: 0, preexisting: 0, known: 0, adjudicatedTrue: 0, adjudicatedFalse: 0, unplanned: 0 }
   const byAngle = {}
   for (const { pr, result } of [...results].sort((a, b) => a.pr - b.pr)) {
     const defects = manifest.defects.filter((d) => d.pr === pr)
@@ -51,12 +51,23 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
     }
     const preexisting = []
     const known = []
+    const adjudicatedTrue = []
+    const adjudicatedFalse = []
     const unplanned = []
     for (const f of confirmed) {
       if (defects.some((d) => matches(f, d, window))) continue
-      if (f.preexisting === true) preexisting.push(label(f))
-      else if ((manifest.known ?? []).some((k) => matches(f, k, window))) known.push(label(f))
-      else unplanned.push(label(f))
+      if (f.preexisting === true) {
+        preexisting.push(label(f))
+        continue
+      }
+      if ((manifest.known ?? []).some((k) => matches(f, k, window))) {
+        known.push(label(f))
+        continue
+      }
+      const adj = (manifest.adjudicated ?? []).find((a) => a.pr === pr && matches(f, a, window))
+      if (!adj) unplanned.push(label(f))
+      else if (adj.truth === true) adjudicatedTrue.push(label(f))
+      else adjudicatedFalse.push(label(f))
     }
     for (const d of defects) {
       const a = (byAngle[d.angle] ??= { planted: 0, found: 0 })
@@ -71,6 +82,8 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
     totals.confirmed += confirmed.length
     totals.preexisting += preexisting.length
     totals.known += known.length
+    totals.adjudicatedTrue += adjudicatedTrue.length
+    totals.adjudicatedFalse += adjudicatedFalse.length
     totals.unplanned += unplanned.length
     rows.push({
       pr,
@@ -83,14 +96,19 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
       missed,
       preexisting,
       known,
+      adjudicatedTrue,
+      adjudicatedFalse,
       unplanned,
     })
   }
+  // Precision is over confirmed findings that are not pre-existing. A finding
+  // nobody has adjudicated counts against it: unknown is not true.
   const judged = totals.confirmed - totals.preexisting
+  const falsePositives = totals.unplanned + totals.adjudicatedFalse
   const summary = {
     ...totals,
     recall: totals.planted ? totals.found / totals.planted : null,
-    precision: judged ? (judged - totals.unplanned) / judged : null,
+    precision: judged ? (judged - falsePositives) / judged : null,
     byAngle,
   }
   return { rows, summary }
@@ -114,13 +132,16 @@ export function format({ rows, summary }) {
       out.push(`  planted ${r.planted.join(', ')} → ${bits.join('; ')}`)
     }
     if (r.unplanned.length) out.push(`  to adjudicate: ${r.unplanned.join(' | ')}`)
+    if (r.adjudicatedTrue.length) out.push(`  true, unplanted: ${r.adjudicatedTrue.join(' | ')}`)
+    if (r.adjudicatedFalse.length) out.push(`  FALSE POSITIVE: ${r.adjudicatedFalse.join(' | ')}`)
     if (r.known.length) out.push(`  known: ${r.known.join(' | ')}`)
     if (r.preexisting.length) out.push(`  pre-existing: ${r.preexisting.join(' | ')}`)
   }
   const s = summary
+  const judged = s.confirmed - s.preexisting
   out.push('')
   out.push(`recall ${pct(s.recall)}: ${s.found} of ${s.planted} planted defects confirmed (${s.wronglyRefuted} found then wrongly refuted, ${s.missed} missed) across ${s.reviewed} PRs`)
-  out.push(`precision ${pct(s.precision)}: ${s.confirmed - s.preexisting - s.unplanned} of ${s.confirmed - s.preexisting} confirmed findings planted or known; ${s.unplanned} to adjudicate; ${s.preexisting} pre-existing left out`)
+  out.push(`precision ${pct(s.precision)}: ${judged - s.unplanned - s.adjudicatedFalse} of ${judged} confirmed findings true (${s.found} planted, ${s.known} known, ${s.adjudicatedTrue} adjudicated true); ${s.adjudicatedFalse} adjudicated false; ${s.unplanned} to adjudicate, counted false; ${s.preexisting} pre-existing left out`)
   const angles = Object.entries(s.byAngle)
   if (angles.length) out.push(`by angle: ${angles.map(([a, v]) => `${a} ${v.found}/${v.planted}`).join(', ')}`)
   return out.join('\n')
