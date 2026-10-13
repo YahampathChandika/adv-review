@@ -20,7 +20,7 @@ const label = (f) => `${f.file}:${f.line} ${f.title} [${f.severity}]`
  */
 export function score({ manifest, results, heads = {}, window = 5 }) {
   const rows = []
-  const totals = { reviewed: 0, planted: 0, found: 0, wronglyRefuted: 0, missed: 0, confirmed: 0, preexisting: 0, known: 0, adjudicatedTrue: 0, adjudicatedFalse: 0, unplanned: 0 }
+  const totals = { reviewed: 0, planted: 0, found: 0, wronglyRefuted: 0, missed: 0, confirmed: 0, plantedMatched: 0, preexisting: 0, known: 0, adjudicatedTrue: 0, adjudicatedFalse: 0, unplanned: 0 }
   const byAngle = {}
   for (const { pr, result } of [...results].sort((a, b) => a.pr - b.pr)) {
     const defects = manifest.defects.filter((d) => d.pr === pr)
@@ -54,8 +54,12 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
     const adjudicatedTrue = []
     const adjudicatedFalse = []
     const unplanned = []
+    let plantedMatched = 0
     for (const f of confirmed) {
-      if (defects.some((d) => matches(f, d, window))) continue
+      if (defects.some((d) => matches(f, d, window))) {
+        plantedMatched += 1
+        continue
+      }
       if (f.preexisting === true) {
         preexisting.push(label(f))
         continue
@@ -82,6 +86,7 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
     totals.confirmed += confirmed.length
     totals.preexisting += preexisting.length
     totals.known += known.length
+    totals.plantedMatched += plantedMatched
     totals.adjudicatedTrue += adjudicatedTrue.length
     totals.adjudicatedFalse += adjudicatedFalse.length
     totals.unplanned += unplanned.length
@@ -94,6 +99,7 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
       found,
       wronglyRefuted,
       missed,
+      plantedMatched,
       preexisting,
       known,
       adjudicatedTrue,
@@ -141,7 +147,7 @@ export function format({ rows, summary }) {
   const judged = s.confirmed - s.preexisting
   out.push('')
   out.push(`recall ${pct(s.recall)}: ${s.found} of ${s.planted} planted defects confirmed (${s.wronglyRefuted} found then wrongly refuted, ${s.missed} missed) across ${s.reviewed} PRs`)
-  out.push(`precision ${pct(s.precision)}: ${judged - s.unplanned - s.adjudicatedFalse} of ${judged} confirmed findings true (${s.found} planted, ${s.known} known, ${s.adjudicatedTrue} adjudicated true); ${s.adjudicatedFalse} adjudicated false; ${s.unplanned} to adjudicate, counted false; ${s.preexisting} pre-existing left out`)
+  out.push(`precision ${pct(s.precision)}: ${judged - s.unplanned - s.adjudicatedFalse} of ${judged} confirmed findings true (${s.plantedMatched} on planted defects, ${s.known} known, ${s.adjudicatedTrue} adjudicated true); ${s.adjudicatedFalse} adjudicated false; ${s.unplanned} to adjudicate, counted false; ${s.preexisting} pre-existing left out`)
   const angles = Object.entries(s.byAngle)
   if (angles.length) out.push(`by angle: ${angles.map(([a, v]) => `${a} ${v.found}/${v.planted}`).join(', ')}`)
   return out.join('\n')

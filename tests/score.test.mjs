@@ -39,6 +39,16 @@ test('a finding matches through any of its sites, and a defect through any of it
   assert.deepEqual(rows[0].unplanned, [])
 })
 
+test('two findings on one planted defect count the defect once and both findings as true', () => {
+  const results = [{ pr: 1, result: { confirmed: [finding('src/b.js', 10), finding('src/c.js', 5)] } }]
+  const { rows, summary } = score({ manifest, results })
+  assert.deepEqual(rows[0].found.map((f) => f.id), ['D2'])
+  assert.equal(rows[0].plantedMatched, 2)
+  assert.equal(summary.found, 1)
+  assert.equal(summary.precision, 1)
+  assert.match(format({ rows, summary }), /2 of 2 confirmed findings true \(2 on planted defects/)
+})
+
 test('a planted defect that was found and then refuted is reported as wrongly refuted, with whether it died only for doubt', () => {
   const results = [{ pr: 1, result: { confirmed: [], refuted: [finding('src/a.js', 41, { dismissedAsUnsure: true, reason: 'nobody could build the input' }), finding('src/b.js', 12, { dismissedAsUnsure: false })] } }]
   const { rows, summary } = score({ manifest, results })
@@ -77,7 +87,8 @@ test('a hand adjudication settles an unplanted finding either way; unadjudicated
   const text = format({ rows, summary })
   assert.match(text, /true, unplanted: test\/x\.test\.js:32/)
   assert.match(text, /FALSE POSITIVE: src\/e\.js:2/)
-  assert.match(text, /precision 50%: 2 of 4 confirmed findings true \(1 planted, 0 known, 1 adjudicated true\); 1 adjudicated false; 1 to adjudicate, counted false/)
+  assert.match(text, /precision 50%: 2 of 4 confirmed findings true \(1 on planted defects, 0 known, 1 adjudicated true\); 1 adjudicated false; 1 to adjudicate, counted false/)
+  assert.equal(summary.plantedMatched, 1)
   // An adjudication is per PR: the same site on another PR is still unplanned.
   const other = score({ manifest: { ...manifest, adjudicated }, results: [{ pr: 2, result: { confirmed: [finding('test/x.test.js', 32)] } }] })
   assert.deepEqual(other.rows[0].unplanned, ['test/x.test.js:32 t test/x.test.js [high]'])
@@ -104,6 +115,6 @@ test('the text report carries the counts a reader needs', () => {
   assert.match(text, /PR #1 \(planted, incomplete, 12 agents\)/)
   assert.match(text, /planted D1, D2 → found D1 by correctness; MISSED D2/)
   assert.match(text, /recall 50%: 1 of 2 planted defects confirmed \(0 found then wrongly refuted, 1 missed\) across 1 PRs/)
-  assert.match(text, /precision 100%: 1 of 1 confirmed findings true \(1 planted, 0 known, 0 adjudicated true\); 0 adjudicated false; 0 to adjudicate, counted false; 0 pre-existing left out/)
+  assert.match(text, /precision 100%: 1 of 1 confirmed findings true \(1 on planted defects, 0 known, 0 adjudicated true\); 0 adjudicated false; 0 to adjudicate, counted false; 0 pre-existing left out/)
   assert.match(text, /by angle: correctness 1\/1, security 0\/1/)
 })
