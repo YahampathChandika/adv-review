@@ -36,11 +36,17 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
     }
     const confirmed = result.confirmed ?? []
     const refuted = result.refuted ?? []
+    // A person's ruling on a finding's own site outranks a site overlap: a
+    // grouped finding may list a planted line among its sites and still be
+    // about something else. A ruled finding counts for neither recall nor
+    // a planted match.
+    const rulingOn = (f) => (manifest.adjudicated ?? []).find((a) => a.pr === pr && a.sites.some((s) => near({ file: f.file, line: f.line }, s, window)))
+    const unruled = confirmed.filter((f) => !rulingOn(f))
     const found = []
     const wronglyRefuted = []
     const missed = []
     for (const d of defects) {
-      const hit = confirmed.find((f) => matches(f, d, window))
+      const hit = unruled.find((f) => matches(f, d, window))
       if (hit) {
         found.push({ id: d.id, foundBy: hit.foundBy ?? [], severity: hit.severity, verdict: hit.verdict ?? null })
         continue
@@ -56,6 +62,12 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
     const unplanned = []
     let plantedMatched = 0
     for (const f of confirmed) {
+      const ruled = rulingOn(f)
+      if (ruled) {
+        if (ruled.truth === true) adjudicatedTrue.push(label(f))
+        else adjudicatedFalse.push(label(f))
+        continue
+      }
       if (defects.some((d) => matches(f, d, window))) {
         plantedMatched += 1
         continue
@@ -68,10 +80,7 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
         known.push(label(f))
         continue
       }
-      const adj = (manifest.adjudicated ?? []).find((a) => a.pr === pr && matches(f, a, window))
-      if (!adj) unplanned.push(label(f))
-      else if (adj.truth === true) adjudicatedTrue.push(label(f))
-      else adjudicatedFalse.push(label(f))
+      unplanned.push(label(f))
     }
     for (const d of defects) {
       const a = (byAngle[d.angle] ??= { planted: 0, found: 0 })

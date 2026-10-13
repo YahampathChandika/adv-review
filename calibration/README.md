@@ -66,8 +66,8 @@ PR, and a true finding about `main` is not a false positive. What remains unmatc
 listed under *to adjudicate* and counts as false until a person rules on it: a true
 finding about `main` goes into `known`; a true finding about the PR that nobody
 planted, or a false one, goes into `adjudicated` with its PR, site and `truth`, and
-the reasoning in `note`. Unknown is not true, so an unadjudicated finding lowers
-precision.
+the reasoning in `note`. A ruling on a finding's own site outranks a planted line among
+its grouped sites. Unknown is not true, so an unadjudicated finding lowers precision.
 
 ## What the numbers mean
 

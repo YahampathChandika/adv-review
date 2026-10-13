@@ -94,6 +94,19 @@ test('a hand adjudication settles an unplanted finding either way; unadjudicated
   assert.deepEqual(other.rows[0].unplanned, ['test/x.test.js:32 t test/x.test.js [high]'])
 })
 
+test("a ruling on the finding's own site outranks a planted line among its grouped sites", () => {
+  const adjudicated = [{ pr: 1, truth: false, title: 'coverage note', sites: [{ file: 'test/y.test.js', lines: [4, 4] }] }]
+  const grouped = { ...finding('test/y.test.js', 4), sites: [{ file: 'test/y.test.js', line: 4 }, { file: 'src/c.js', line: 5 }] }
+  const { rows, summary } = score({ manifest: { ...manifest, adjudicated }, results: [{ pr: 1, result: { confirmed: [grouped] } }] })
+  assert.deepEqual(rows[0].adjudicatedFalse, ['test/y.test.js:4 t test/y.test.js [high]'])
+  assert.deepEqual(rows[0].found, [])
+  assert.deepEqual(rows[0].missed, ['D1', 'D2'])
+  assert.equal(summary.precision, 0)
+  // Without the ruling, the overlap counts it as a match on D2.
+  const unruled = score({ manifest, results: [{ pr: 1, result: { confirmed: [grouped] } }] })
+  assert.deepEqual(unruled.rows[0].found.map((f) => f.id), ['D2'])
+})
+
 test('a result for a commit that is no longer the head is skipped, as is one for a PR the manifest does not list', () => {
   const results = [
     { pr: 1, result: { headSha: 'aaaa111', confirmed: [finding('src/a.js', 40)] } },
