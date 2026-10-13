@@ -2,12 +2,12 @@
   "schema": 1,
   "repository": "YahampathChandika/adv-review-calibration",
   "base": "89da56f4d9e0ea6184984cea8e96f5f710983aa7",
-  "note": "The answer key for the fixture. pr is filled in once the pull requests exist; sites are at each branch head.",
+  "note": "The answer key for the fixture. Sites are file and lines at each branch head; the scorer matches within a window.",
   "defects": [
     {
       "id": "D1",
       "branch": "feat/page-transfers",
-      "pr": null,
+      "pr": 1,
       "angle": "correctness",
       "alsoTrips": [
         "tests-that-dont-test"
@@ -30,7 +30,7 @@
     {
       "id": "D2",
       "branch": "feat/memo-control-chars",
-      "pr": null,
+      "pr": 2,
       "angle": "tests-that-dont-test",
       "alsoTrips": [
         "correctness",
@@ -61,7 +61,7 @@
     {
       "id": "D3",
       "branch": "refactor/open-account-actor",
-      "pr": null,
+      "pr": 3,
       "angle": "boundary-contract",
       "alsoTrips": [],
       "severity": "medium",
@@ -89,7 +89,7 @@
     {
       "id": "D4",
       "branch": "feat/overdraft",
-      "pr": null,
+      "pr": 4,
       "angle": "silent-drops",
       "alsoTrips": [
         "migrations-and-rollout"
@@ -126,7 +126,7 @@
     {
       "id": "D5",
       "branch": "feat/accountant-role",
-      "pr": null,
+      "pr": 5,
       "angle": "authz-and-attribution",
       "alsoTrips": [],
       "severity": "high",
@@ -168,7 +168,7 @@
     {
       "id": "D6",
       "branch": "feat/transfer-on-behalf",
-      "pr": null,
+      "pr": 6,
       "angle": "authz-and-attribution",
       "alsoTrips": [],
       "severity": "high",
@@ -203,7 +203,7 @@
     {
       "id": "D7",
       "branch": "feat/named-exports",
-      "pr": null,
+      "pr": 7,
       "angle": "security",
       "alsoTrips": [],
       "severity": "high",
@@ -231,7 +231,7 @@
     {
       "id": "D8",
       "branch": "feat/named-exports",
-      "pr": null,
+      "pr": 7,
       "angle": "security",
       "alsoTrips": [],
       "severity": "medium",
@@ -252,7 +252,7 @@
     {
       "id": "D9",
       "branch": "feat/withdrawals-summary",
-      "pr": null,
+      "pr": 8,
       "angle": "data-integrity",
       "alsoTrips": [],
       "severity": "medium",
@@ -280,7 +280,7 @@
     {
       "id": "D10",
       "branch": "refactor/account-name",
-      "pr": null,
+      "pr": 9,
       "angle": "migrations-and-rollout",
       "alsoTrips": [],
       "severity": "high",
@@ -316,13 +316,13 @@
   "clean": [
     {
       "branch": "feat/account-audit",
-      "pr": null,
+      "pr": 10,
       "title": "Audit trail per account",
       "head": "6040444b2e7da9774a98c28c7c8d15d73b175150"
     },
     {
       "branch": "feat/export-currency",
-      "pr": null,
+      "pr": 11,
       "title": "Export: a currency column",
       "head": "be23305b3c846e94b25272aaabde16aa55e3fc21"
     }

@@ -22,18 +22,18 @@ This directory measures that against a fixture with known defects.
 
 | | PR | Angle | Severity | What |
 | :- | :- | :- | :- | :- |
-| D1 | Page the transfer history | correctness | high | every page drops its 20th item |
-| D2 | Refuse control characters in memos | tests-that-dont-test | medium | the test cannot fail; the code alters the memo instead of refusing it |
-| D3 | openAccount takes the acting user | boundary-contract | medium | the seed script still calls the old signature |
-| D4 | Overdraft limits | silent-drops | high | the new key is not in `SCHEMA`, so the store strips it |
-| D5 | Accountant role | authz-and-attribution | high | the relaxed helper also lets an accountant close and export any account |
-| D6 | Transfer on a member's behalf | authz-and-attribution | high | the admin's act is recorded as the member's |
-| D7 | Named exports | security | high | the file name is joined into the path unchecked |
-| D8 | Named exports | security | medium | failed sign-ins log the bearer token |
-| D9 | Withdrawals and a summary | data-integrity | medium | withdrawals never update the running totals |
-| D10 | Store the label as name | migrations-and-rollout | high | the rename deletes the old key in the same migration |
+| D1 | #1 Page the transfer history | correctness | high | every page drops its 20th item |
+| D2 | #2 Refuse control characters in memos | tests-that-dont-test | medium | the test cannot fail; the code alters the memo instead of refusing it |
+| D3 | #3 openAccount takes the acting user | boundary-contract | medium | the seed script still calls the old signature |
+| D4 | #4 Overdraft limits | silent-drops | high | the new key is not in `SCHEMA`, so the store strips it |
+| D5 | #5 Accountant role | authz-and-attribution | high | the relaxed helper also lets an accountant close and export any account |
+| D6 | #6 Transfer on a member's behalf | authz-and-attribution | high | the admin's act is recorded as the member's |
+| D7 | #7 Named exports | security | high | the file name is joined into the path unchecked |
+| D8 | #7 Named exports | security | medium | failed sign-ins log the bearer token |
+| D9 | #8 Withdrawals and a summary | data-integrity | medium | withdrawals never update the running totals |
+| D10 | #9 Store the label as name | migrations-and-rollout | high | the rename deletes the old key in the same migration |
 
-Two PRs, *Audit trail per account* and *Export: a currency column*, are clean. A
+Two PRs, #10 *Audit trail per account* and #11 *Export: a currency column*, are clean. A
 finding on them is a false positive until a person says otherwise.
 
 Every defect was shown to bite on its branch before the key was written: the script
