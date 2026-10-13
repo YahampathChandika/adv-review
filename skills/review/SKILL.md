@@ -99,9 +99,12 @@ ceiling: lower it when usage is running low, raise it for a large or risky PR, o
 project with many angles of its own (eight generic angles plus the project's need
 roughly `(angles + 2) / 0.7 + 2` agents to all run). Do not choose a number for them.
 
-A run that hits the session limit part-way comes back `incomplete`, with the dead agents
-named. After the limit resets, resume it — completed agents replay from cache for free:
-`Workflow({ scriptPath, resumeFromRunId, args })` with the same `args`.
+A run that loses an agent part-way — to the session limit, or to an API call that never
+answered — comes back `incomplete`, with the dead agents named. Resume it once the cause
+has passed; completed agents replay from cache for free:
+`Workflow({ name: 'adv-review:adversarial', resumeFromRunId, args })` with the same
+`args`. A finder that died has no findings to verify, so resuming is the only way to get
+its angle covered.
 
 ## 4. Launch
 

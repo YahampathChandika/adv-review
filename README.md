@@ -142,10 +142,14 @@ to prove it.
 
 ## Cost and footprint
 
-- **Tokens.** A run spawns many Opus agents. Expect a review to cost several times what
-  reading the PR in conversation would. Runs count toward your plan's usage limits, and
-  a run that hits a limit pauses and resumes when it resets. Set `model` to a smaller
-  model for a cheaper, weaker run.
+- **Tokens and time.** A run spawns many Opus agents. Expect a review to cost several
+  times what reading the PR in conversation would, and to take between half an hour and
+  two hours, most of it the agents running the project's own test suites. Runs count
+  toward your plan's usage limits, and a run that hits a limit pauses and resumes when
+  it resets. Set `model` to a smaller model for a cheaper, weaker run.
+- **A lost agent.** If an agent dies — the session limit, an API call that never
+  answers — the run comes back `incomplete` with that agent named, never as clean. Ask
+  to resume it: finished agents replay from cache and only the dead one runs again.
 - **Disk.** Every agent gets a full worktree of the repository under
   `.claude/worktrees/`. Ten agents on a large monorepo is ten copies. The session
   removes them after the report; if a run is interrupted, remove that run's worktrees
