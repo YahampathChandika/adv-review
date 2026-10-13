@@ -1,0 +1,31 @@
+schema_version: "1.1"
+name: review-smoke
+description: >
+  One real review of a planted-defect PR in the calibration fixture, from a fresh
+  clone. Checks that the skill fires, launches the workflow, and writes a result
+  file with a status. Expensive: needs --scaffold, --allow-tools, gh auth, and up
+  to an hour. The numbers come from calibration/score.mjs over --out files, not
+  from this case.
+tags: [calibration, slow]
+runs: 1
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 60
+  timeout_seconds: 3600
+  allowed_tools: [Read, Glob, Grep, Skill, Agent, Workflow, Bash, Write]
+graders:
+  - name: skill-fired
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(?:[\w-]+:)?review"'
+  - name: workflow-launched
+    type: tool_used
+    tool: Workflow
+  - name: result-written
+    type: file_exists
+    path: "result.json"
+  - name: result-has-status
+    type: regex
+    target: { source: file, path: result.json }
+    pattern: '"status"\s*:\s*"(complete|incomplete)"'

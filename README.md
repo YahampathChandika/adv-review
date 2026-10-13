@@ -189,6 +189,17 @@ your machine, pass `--no-run`.
 Agents never commit, push, change branch, or post anything. Posting the summary comment
 is the session's, after your yes, under your `gh` identity.
 
+## Calibration
+
+The review is measured against a fixture with known defects:
+[adv-review-calibration](https://github.com/YahampathChandika/adv-review-calibration),
+a small ledger service whose pull requests each carry one planted defect the PR's own
+tests miss (two carry none). The answer key and the scorer are in [`calibration/`](calibration/):
+run each PR with `--out`, then `node calibration/score.mjs` reports which planted
+defects were confirmed, found and then wrongly refuted, or missed, what was reported
+that nobody planted, and recall and precision over the set. The numbers from the
+first pass will be recorded there with the release that ran them.
+
 ## Tests
 
 The script's own tests run every failure path — dead agents, a wrong commit, a forged
@@ -197,6 +208,10 @@ claim, a ceiling too low — with scripted stand-ins for the agents, so no agent
 ```bash
 node --test
 ```
+
+`evals/` holds a `claude plugin eval` case that runs one real review from a fresh
+clone of the fixture; it is slow and costs agents, and needs `--scaffold` and
+`--allow-tools`. See `evals/review-smoke/case.yaml`.
 
 ## Origin
 

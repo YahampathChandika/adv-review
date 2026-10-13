@@ -1,0 +1,371 @@
+{
+  "schema": 1,
+  "repository": "YahampathChandika/adv-review-calibration",
+  "base": "89da56f4d9e0ea6184984cea8e96f5f710983aa7",
+  "note": "The answer key for the fixture. pr is filled in once the pull requests exist; sites are at each branch head.",
+  "defects": [
+    {
+      "id": "D1",
+      "branch": "feat/page-transfers",
+      "pr": null,
+      "angle": "correctness",
+      "alsoTrips": [
+        "tests-that-dont-test"
+      ],
+      "severity": "high",
+      "title": "Every page of the transfer history drops its last item",
+      "summary": "transfersFor slices with an end of start + PAGE_SIZE - 1, so each page holds 19 items; the 20th of every page (indexes 19, 39, \u2026) appears on no page, while total reports them all. The PR's test covers three transfers and page 2 of an empty tail only.",
+      "failure": "An account with 21 transfers: GET /accounts/:id/transfers?page=1 returns 19 items, page 2 returns 1; the transfer at index 19 is on neither page; total says 21.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            69,
+            70
+          ]
+        }
+      ],
+      "head": "5af451d1118a286fc59dd8d1ca957e4c5aebecf4"
+    },
+    {
+      "id": "D2",
+      "branch": "feat/memo-control-chars",
+      "pr": null,
+      "angle": "tests-that-dont-test",
+      "alsoTrips": [
+        "correctness",
+        "silent-drops"
+      ],
+      "severity": "medium",
+      "title": "The control-character test cannot fail, and the code alters the memo instead of refusing it",
+      "summary": "The new test wraps transfer() in try/catch and asserts only inside the catch, so it passes whether or not anything is thrown. Nothing is thrown: the code strips control characters and stores the altered memo, while the README and the PR say a memo with one is refused with 400.",
+      "failure": "POST /transfers with memo 'rent\\u0000 due' \u2192 201, memo stored as 'rent due'; the README promises a 400.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            20,
+            20
+          ]
+        },
+        {
+          "file": "test/transfers.test.js",
+          "lines": [
+            71,
+            78
+          ]
+        }
+      ],
+      "head": "15dd7c4aaa0be03d4171fb77b94b233d29f75046"
+    },
+    {
+      "id": "D3",
+      "branch": "refactor/open-account-actor",
+      "pr": null,
+      "angle": "boundary-contract",
+      "alsoTrips": [],
+      "severity": "medium",
+      "title": "openAccount's signature changed; scripts/seed.mjs still calls the old one",
+      "summary": "openAccount(store, { ownerId, label, actorId }) became openAccount(store, actor, { label, currency, ownerId }). The route and the tests were updated; scripts/seed.mjs, which the README tells a new install to run, was not, and nothing tests it.",
+      "failure": "node scripts/seed.mjs \u2192 TypeError: Cannot destructure property 'label' of 'undefined'; no accounts are seeded.",
+      "sites": [
+        {
+          "file": "scripts/seed.mjs",
+          "lines": [
+            26,
+            27
+          ]
+        },
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            9,
+            9
+          ]
+        }
+      ],
+      "head": "ec38b7f4818c2cd7a7aee111ab72a7bfe1d786e7"
+    },
+    {
+      "id": "D4",
+      "branch": "feat/overdraft",
+      "pr": null,
+      "angle": "silent-drops",
+      "alsoTrips": [
+        "migrations-and-rollout"
+      ],
+      "severity": "high",
+      "title": "overdraftCents is never stored: the key is missing from SCHEMA, so pick strips it",
+      "summary": "Every write goes through pick(), which keeps only the keys SCHEMA lists, and SCHEMA.accounts was not given overdraftCents. setOverdraft's update and openAccount's insert both drop it silently; the response then shows overdraftCents 0 via the serializer's ?? 0, and a transfer that relies on the limit fails with insufficient funds. Migration 003 writes the key directly, but the first update of a migrated account strips it again. The README's own rule says to add the key to SCHEMA in the same change.",
+      "failure": "Admin: POST /accounts/:id/overdraft { overdraftCents: 500 } \u2192 200 with overdraftCents 0; the stored row has no overdraftCents; a 300-cent transfer from that empty account \u2192 409 insufficient funds.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "lines": [
+            12,
+            12
+          ]
+        },
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            59,
+            59
+          ]
+        },
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            18,
+            18
+          ]
+        }
+      ],
+      "head": "88d0e534ac12020b2a6f616da97efb8b360d5676"
+    },
+    {
+      "id": "D5",
+      "branch": "feat/accountant-role",
+      "pr": null,
+      "angle": "authz-and-attribution",
+      "alsoTrips": [],
+      "severity": "high",
+      "title": "Relaxing getOwnAccount for accountants also lets them close and export any member's account",
+      "summary": "canSee() was added for the read routes, but it was wired into getOwnAccount, which closeAccount and the export route also use. An accountant, described as able to change nothing, can close any empty account and write any account's statement to disk. Only the two read routes are tested.",
+      "failure": "Accountant token: POST /accounts/<member's id>/close \u2192 200, the account is closed; POST /accounts/<member's id>/export \u2192 200, the CSV is written.",
+      "sites": [
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            38,
+            40
+          ]
+        },
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            42,
+            46
+          ]
+        },
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            49,
+            49
+          ]
+        },
+        {
+          "file": "src/server.js",
+          "lines": [
+            101,
+            101
+          ]
+        }
+      ],
+      "head": "5ff5809a7176caf08fc66f3395df95848fca20e6"
+    },
+    {
+      "id": "D6",
+      "branch": "feat/transfer-on-behalf",
+      "pr": null,
+      "angle": "authz-and-attribution",
+      "alsoTrips": [],
+      "severity": "high",
+      "title": "An administrator's on-behalf transfer is recorded as the member's own act",
+      "summary": "The route passes the member as transfer()'s user so the ownership checks apply to the member's accounts, but transfer() also takes actorId and the audit entry's actor from that same argument. The transfer row and the audit log say the member moved the money; the administrator who did it appears nowhere. The test checks balances only.",
+      "failure": "Admin POSTs /transfers with onBehalfOf: <member> \u2192 the transfer row's actorId and its audit entry's actorId are the member's id, not the admin's.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            83,
+            84
+          ]
+        },
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            34,
+            34
+          ]
+        },
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            37,
+            37
+          ]
+        }
+      ],
+      "head": "5d9e288679769335a688cda4db28d8b2a64b4675"
+    },
+    {
+      "id": "D7",
+      "branch": "feat/named-exports",
+      "pr": null,
+      "angle": "security",
+      "alsoTrips": [],
+      "severity": "high",
+      "title": "The export file name is joined into the path unchecked: a name with ../ writes outside the export directory",
+      "summary": "name is validated for length only, then path.join(dir, `${name}.csv`) is written. A name such as ../../../tmp/x writes wherever the process may. The comment that guaranteed the file name was the account's id and nothing else was removed by this PR.",
+      "failure": "POST /accounts/:id/export { name: '../escaped' } \u2192 200; escaped.csv is written beside, not inside, exports/.",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "lines": [
+            18,
+            18
+          ]
+        },
+        {
+          "file": "src/server.js",
+          "lines": [
+            102,
+            104
+          ]
+        }
+      ],
+      "head": "036830a04e80ca63d934f178397b7d640e59d0cc"
+    },
+    {
+      "id": "D8",
+      "branch": "feat/named-exports",
+      "pr": null,
+      "angle": "security",
+      "alsoTrips": [],
+      "severity": "medium",
+      "title": "Failed sign-ins log the Authorization header, bearer token included",
+      "summary": "The new warning prints ctx.req.headers.authorization whole. A mistyped or expired token, or a real one sent to the wrong environment, lands in the logs in clear, against the auth module's own comment that the token is never logged.",
+      "failure": "A request with Authorization: Bearer SECRET \u2192 the log line 'sign-in failed GET /accounts with Bearer SECRET'.",
+      "sites": [
+        {
+          "file": "src/auth.js",
+          "lines": [
+            25,
+            25
+          ]
+        }
+      ],
+      "head": "036830a04e80ca63d934f178397b7d640e59d0cc"
+    },
+    {
+      "id": "D9",
+      "branch": "feat/withdrawals-summary",
+      "pr": null,
+      "angle": "data-integrity",
+      "alsoTrips": [],
+      "severity": "medium",
+      "title": "Withdrawals do not update the running totals, so the summary drifts from the accounts",
+      "summary": "deposit() bumps the currency's total; the new withdraw() changes the balance and records the audit entry but never calls bumpTotal. After any withdrawal the summary overstates the money held, for good. The tests check the summary after deposits only.",
+      "failure": "Deposit 100 then withdraw 40 \u2192 the account holds 60, GET /summary says AUD 100.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            68,
+            80
+          ]
+        },
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            41,
+            41
+          ]
+        }
+      ],
+      "head": "074592689156ce5df3f42042a91dffbd81dfed27"
+    },
+    {
+      "id": "D10",
+      "branch": "refactor/account-name",
+      "pr": null,
+      "angle": "migrations-and-rollout",
+      "alsoTrips": [],
+      "severity": "high",
+      "title": "The rename migration deletes label in the same step that writes name",
+      "summary": "docs/deploy.md: a migration is additive first and a removal ships separately, once no running copy reads the key. Two copies share the file during a deploy. Once 003 has run, the previous release reads account.label as undefined, and its pick() (SCHEMA with label, no name) strips name on its next write, so an account saved by the old copy during the window loses its name for good.",
+      "failure": "Migrate, then run the previous release against the file: every account's label is undefined; after the old copy saves (any transfer, close or deposit) the account has neither label nor name.",
+      "sites": [
+        {
+          "file": "src/migrations/003-account-name.js",
+          "lines": [
+            6,
+            6
+          ]
+        },
+        {
+          "file": "src/store.js",
+          "lines": [
+            12,
+            12
+          ]
+        },
+        {
+          "file": "docs/deploy.md",
+          "lines": [
+            10,
+            12
+          ]
+        }
+      ],
+      "head": "016008ca54a8acd3cc007b6c6c0ce2344685b86b"
+    }
+  ],
+  "clean": [
+    {
+      "branch": "feat/account-audit",
+      "pr": null,
+      "title": "Audit trail per account",
+      "head": "6040444b2e7da9774a98c28c7c8d15d73b175150"
+    },
+    {
+      "branch": "feat/export-currency",
+      "pr": null,
+      "title": "Export: a currency column",
+      "head": "be23305b3c846e94b25272aaabde16aa55e3fc21"
+    }
+  ],
+  "known": [
+    {
+      "id": "K1",
+      "title": "Tokens are compared with === and stored in plain text",
+      "sites": [
+        {
+          "file": "src/auth.js",
+          "lines": [
+            10,
+            10
+          ]
+        }
+      ]
+    },
+    {
+      "id": "K2",
+      "title": "No rate limiting on any route",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            111,
+            111
+          ]
+        }
+      ]
+    },
+    {
+      "id": "K3",
+      "title": "newId is unique within one process only",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "lines": [
+            27,
+            30
+          ]
+        }
+      ]
+    }
+  ]
+}

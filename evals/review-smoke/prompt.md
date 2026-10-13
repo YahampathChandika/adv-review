@@ -1,0 +1,1 @@
+The working directory is a clone of the calibration fixture, checked out on the branch of an open pull request. Run `/adv-review:review --no-post --out result.json` for that pull request. Do not post anything, commit anything, or change branch. When the review finishes, write nothing but a one-line summary: the status, and how many findings were confirmed.

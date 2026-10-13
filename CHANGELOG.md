@@ -13,6 +13,11 @@
 - Given no `--agents`, the run computes the smallest ceiling with room for every fixed
   angle and two of the scout's own, never under 20.
 - `--out <path>` writes the run's result JSON to a file.
+- A calibration set: a public fixture repository with ten planted defects across the
+  eight generic angles and two clean PRs, the answer key in `calibration/manifest.json`,
+  and `calibration/score.mjs`, which scores `--out` results for recall and precision.
+- An eval case (`evals/review-smoke`) for `claude plugin eval` that runs one real review
+  from a fresh clone of the fixture.
 
 ## 0.1.0 — 2026-10-13
 
