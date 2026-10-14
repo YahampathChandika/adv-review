@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased — 0.2.0
+## 0.2.0 — 2026-10-14
+
+Calibrated: on the fixture, with Sonnet agents, all ten planted defects confirmed and
+none wrongly refuted; 20 of 25 confirmed findings true after adjudication; three
+findings on the two clean PRs, all false. See `calibration/README.md`.
 
 - Every finding says whether the PR introduced the defect or it was already on the base
   commit (`introducedByDiff` from the finders, correctable by a skeptic; `preexisting` in

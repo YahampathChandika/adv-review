@@ -1,0 +1,236 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "88d0e534ac12020b2a6f616da97efb8b360d5676",
+  "angles": [
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "The only new input is a single strictly-validated integer (Number.isInteger, >=0) behind an existing admin role check; no HTML/SQL rendering, no redirects, no CORS change, no secrets, no new third-party data flow. The auth gate itself is covered under authz-and-attribution, leaving nothing distinct for this angle to find."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No new concurrency pattern, cache, or unbounded-growth structure is introduced; the store remains the pre-existing single-process, synchronous-in-memory, whole-file-rewrite design documented in README's Known Limitations, unchanged by this diff. The real state-consistency defect here (a value that doesn't survive a write) is precisely what silent-drops and migrations-and-rollout are built to catch, so keeping both of those covers it without a dedicated data-integrity pass."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "PR adds an admin-only per-account overdraft limit: POST /accounts/:id/overdraft (via setOverdraft in accounts.js), migration 003 backfilling overdraftCents=0, exposure on publicAccount, and canCover() letting transfer() draw into balance+overdraft instead of a strict balance check. I confirmed by direct execution (openAccount -> setOverdraft(500) -> store.get -> transfer requiring overdraft) that src/store.js's SCHEMA.accounts list was never extended with 'overdraftCents', so pick() silently strips the field on every insert/update — the admin endpoint returns 200 but the limit never persists, and a transfer that only overdraft could cover still fails with 'insufficient funds'; the PR's own docs/deploy.md rule (\"Add the key to SCHEMA in the same change that starts writing it\") is violated. `npm run check` and `npm test` both pass (24/24) because the new tests check only HTTP status codes and a hand-built canCover() unit test, never a round-tripped value.",
+  "confirmed": [
+    {
+      "title": "overdraftCents stripped by store SCHEMA allowlist",
+      "file": "src/store.js",
+      "line": 12,
+      "category": "silent-drop",
+      "severity": "critical",
+      "rootCause": "SCHEMA.accounts in src/store.js was never extended with 'overdraftCents', so pick() silently strips that field from every store.insert/store.update call, making the overdraft feature a persistence no-op despite the HTTP layer reporting success.",
+      "summary": "SCHEMA.accounts was not extended with 'overdraftCents', so every write of that field made by this PR's own code (openAccount's initial value and setOverdraft's update) is silently dropped by pick() before it ever reaches a stored row — the overdraft feature never actually persists a non-zero limit at runtime.",
+      "failure": "Not refuted — the claimed failure stands as described: setOverdraft(store, admin, {accountId, overdraftCents: 500}) silently fails to persist any value above 0 (store.update -> pick strips overdraftCents because SCHEMA.accounts in src/store.js:12 omits it), publicAccount still reports overdraftCents: 0, and a transfer that should be covered by the overdraft (balance 0, needed overdraft 500, transfer amount 300) is rejected with 409 'insufficient funds' instead of succeeding.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents stripped by store SCHEMA allowlist"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "SCHEMA.accounts never gains overdraftCents"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Overdraft limit is silently dropped by store's schema allowlist"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Overdraft limit is silently dropped by the store's field allowlist"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents silently dropped by store's SCHEMA allowlist"
+        }
+      ],
+      "foundBy": [
+        "silent-drops",
+        "migrations-and-rollout",
+        "boundary-contract",
+        "correctness",
+        "authz-and-attribution"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js: SCHEMA.accounts (line 12) is ['id','ownerId','label','currency','balanceCents','closedAt','createdAt','updatedAt'] — no 'overdraftCents'. pick() (lines 18-24) keeps only keys in SCHEMA, used by both insert() and update(). The diff's hunk list confirms src/store.js is never touched by this PR, so the schema gap was introduced by this PR's failure to extend a schema it newly depends on. I executed the real code directly in the checked-out worktree: openAccount() -> store.get() shows the inserted row has no overdraftCents key; setOverdraft(store, admin, {accountId, overdraftCents:500}) -> the returned/updated row still has no overdraftCents key (pick() strips it again on update); publicAccount(updated) reports overdraftCents:0 (via the ?? 0 fallback) even though 500 was just set; a subsequent transfer() of 300 cents from that account (balance 0) throws HttpError(409,'insufficient funds') because canCover() reads from.overdraftCents as undefined and falls back to 0. I also ran `npm test`: all 25 existing tests pass, confirming the bug is real yet undetected — the admin-overdraft test (test/server.test.js:86) only asserts HTTP status 200 and never checks the response body's overdraftCents value; the canCover test (test/transfers.test.js:72-73) calls canCover on a literal object, bypassing the store/pick() entirely; and the migration test (test/store.test.js:40) passes because migration 003 mutates store.data.accounts rows directly, bypassing pick()/SCHEMA. Every element of the claimed failure (silent drop on insert, silent drop on update, false 200 OK with overdraftCents:0, 409 on a transfer that should be covered, migration appearing to work only because it bypasses pick) reproduced exactly as described. This is a real, PR-introduced, critical defect: the entire feature is a persistence no-op at runtime.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Overdraft test checks status only, misses persistence",
+      "file": "test/server.test.js",
+      "line": 79,
+      "category": "test-coverage",
+      "severity": "critical",
+      "rootCause": "The single new HTTP test for POST /accounts/:id/overdraft ('only an administrator sets an overdraft limit' in test/server.test.js) asserts only status codes (403/400/200) and never inspects the response body or re-fetches the account, so it cannot detect that the set limit is never actually persisted.",
+      "summary": "The new admin-overdraft HTTP test asserts only status codes, never the response body or a follow-up GET, so it passes even though the admin-set overdraft limit is silently discarded by the store.",
+      "failure": "POST /accounts/:id/overdraft {overdraftCents:500} as admin returns 200, but the stored account row never retains an overdraftCents field (store.js SCHEMA.accounts, untouched by this diff, omits it, so pick() strips it on every insert/update). The response body of the set-overdraft call itself already shows overdraftCents:0. A subsequent transfer of 300 cents from that 0-balance account then fails with 409 insufficient funds. The sole new test (test/server.test.js:79-86) checks only HTTP status codes and so passes unchanged whether the feature works or is completely inert.",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "Overdraft test checks status only, misses persistence"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 146,
+          "title": "overdraft test never checks persisted value or response body"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 86,
+          "title": "New overdraft HTTP test checks status only"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 84,
+          "title": "New overdraft HTTP test never checks the persisted value"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 86,
+          "title": "New overdraft test never asserts the persisted value"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 153,
+          "title": "New overdraft test never checks the persisted value"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test",
+        "silent-drops",
+        "migrations-and-rollout",
+        "boundary-contract",
+        "correctness",
+        "authz-and-attribution"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js: SCHEMA.accounts (line 12) lacks 'overdraftCents', and pick() (used by both store.insert and store.update) silently drops any key not in SCHEMA[collection]. This diff never touches store.js. I then ran the actual PR code: after POST /accounts, the raw stored row has no overdraftCents key; after POST /accounts/:id/overdraft {overdraftCents:500} as admin, the HTTP response itself returns 200 with body overdraftCents:0 (not 500), and the raw stored row still lacks the key; a subsequent transfer of 300 cents from that 0-balance account fails with 409 insufficient funds despite the claimed 500 overdraft. I also ran `node --test test/server.test.js`: all 5 tests pass, including the new 'only an administrator sets an overdraft limit' test, because it asserts only .status (403/400/200) and never reads .body or re-fetches the account. This exactly matches the claimed mechanism, claimed evidence (raw row shape, 409 on transfer), and claimed test gap. The six cited 'sites' are all the same single new test cited at different (sometimes miscounted, e.g. lines 146/153 exceed the file's 90-line length) line numbers by different review passes — not distinct locations where the defect fails to hold — so no falseSites. Severity CRITICAL is accurate: the entire feature is silently non-functional in production. Correctly attributed as introduced by this diff: before this PR there was no overdraft feature at all; the PR adds a broken one by omitting the necessary store.js schema change.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "canCover test bypasses store, misses lost overdraft",
+      "file": "test/transfers.test.js",
+      "line": 71,
+      "category": "test-coverage",
+      "severity": "critical",
+      "rootCause": "The new canCover test in test/transfers.test.js exercises only the pure function on hand-built literals and never chains setOverdraft() through the store into transfer(), so the suite has no test covering the real integration path where the overdraft value is lost.",
+      "summary": "Beyond a missing-test gap: setOverdraft()'s persisted write and openAccount()'s initial write are both silently stripped of overdraftCents by Store's schema-driven pick(), so the entire overdraft feature is inert in the running system — admins receive a 200 success response but the limit never takes effect, and transfers that should be covered by it are wrongly rejected with 'insufficient funds'. This is a complete, silent failure of the PR's stated functionality, not merely an untested edge case.",
+      "failure": "An administrator calls setOverdraft(store, admin, {accountId, overdraftCents: 500}) on a real account, then a member calls transfer() expecting the overdraft to cover an amount beyond the balance; because store.update() strips overdraftCents via pick() (SCHEMA.accounts lacks it, confirmed above), the stored row never carries the limit and the transfer is wrongly refused with 'insufficient funds' — yet no test in this file or elsewhere calls setOverdraft() followed by transfer() on the same store-backed account, so this regression has no test that can catch it.",
+      "sites": [
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "canCover test bypasses store, misses lost overdraft"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Confirmed by direct reproduction. SCHEMA.accounts in src/store.js does not list 'overdraftCents', and both Store.insert and Store.update route every write through pick(), which drops any key absent from SCHEMA. I wrote and ran a script (openAccount -> setOverdraft(store, admin, {overdraftCents:500}) -> transfer(300 cents against 0 balance)) and confirmed: the stored account row after setOverdraft has no overdraftCents key, and the subsequent transfer throws 409 'insufficient funds' instead of succeeding. I then ran the full test suite (npm test): all 24 tests pass, including the PR's new tests. Inspecting why: the HTTP test in test/server.test.js only checks response status codes (403/400/200), never the returned body's overdraftCents or a subsequent transfer; the canCover test in test/transfers.test.js only calls the pure function on hand-built literals ({balanceCents, overdraftCents} object literals), never touching the store. grep -rn 'setOverdraft' test/ src/ shows it is called only from src/server.js and defined in src/accounts.js -- no test anywhere chains setOverdraft() through the store into transfer() on the same account. The claim's described failure is exactly what I reproduced, and the diff itself (which adds overdraftCents to the inserted/updated row shapes without adding it to SCHEMA.accounts) is what introduces the bug and the gap.",
+      "verifiedBy": [
+        "refute:p3.1",
+        "refute:p3.2",
+        "refute:p3.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true,
+      "severityFrom": "high"
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "README's \"Role | May\" table (unchanged by the diff) is now inconsistent with the diff's own addition to the API route table: it still says admin may only do \"everything a member may, plus deposits into any account,\" omitting the new overdraft-setting capability the same diff documents two lines above.",
+      "why": "Every run angle inspects code behavior (authz checks, validation, persistence, migrations, tests); none of them cross-check a PR's documentation prose against its own other documentation prose within the same file."
+    },
+    {
+      "what": "setOverdraft's failure paths (404 on a missing account, 409 on a closed account) and its audit entry ('account.overdraft') have no test anywhere, unit or HTTP-level — unlike the parallel deposit() function, which has an explicit 404 test and an audit-trail assertion.",
+      "why": "tests-that-dont-test targets existing tests that look like they verify something but don't; this is a case of no test existing at all for these paths, so a misleading-assertion scan doesn't surface it, and correctness/boundary-contract angles verify the code is right, not that a regression there would be caught."
+    },
+    {
+      "what": "setOverdraft validates overdraftCents in isolation (non-negative integer) but never checks it against the account's current balanceCents, so an admin can lower a limit below the magnitude of an existing overdrawn balance, leaving balanceCents + overdraftCents < 0 — a violation of the exact invariant transfers.js's canCover enforces — with no code path to detect or correct it.",
+      "why": "The defect only appears from reading setOverdraft and canCover together as a pair; each function is locally correct on its own, so a per-function correctness or boundary-contract pass that doesn't trace this cross-function invariant would pass both and still miss it."
+    }
+  ],
+  "counts": {
+    "raw": 12,
+    "rootCauses": 3,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 3,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 18,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "skeptics": 9,
+    "critic": 1,
+    "retries": 0
+  }
+}

@@ -208,7 +208,7 @@
       "alsoTrips": [],
       "severity": "high",
       "title": "The export file name is joined into the path unchecked: a name with ../ writes outside the export directory",
-      "summary": "name is validated for length only, then path.join(dir, `${name}.csv`) is written. A name such as ../../../tmp/x writes wherever the process may. The comment that guaranteed the file name was the account's id and nothing else was removed by this PR.",
+      "summary": "name is validated for length only, then path.join(dir, `${name}.csv`) is written. A name such as ../../../tmp/x writes wherever the process may. The comment that guaranteed the file name was the account's id and nothing else was removed by this PR. The site is the unchecked join in export.js; the route's length-only validation is context, not a second site.",
       "failure": "POST /accounts/:id/export { name: '../escaped' } \u2192 200; escaped.csv is written beside, not inside, exports/.",
       "sites": [
         {
@@ -216,13 +216,6 @@
           "lines": [
             18,
             18
-          ]
-        },
-        {
-          "file": "src/server.js",
-          "lines": [
-            102,
-            104
           ]
         }
       ],
@@ -366,6 +359,225 @@
           ]
         }
       ]
+    }
+  ],
+  "adjudicated": [
+    {
+      "pr": 11,
+      "truth": false,
+      "title": "New currency test never varies the currency value",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "lines": [
+            90,
+            90
+          ]
+        }
+      ],
+      "note": "False. A transfer's two accounts must share a currency, so both are NZD by necessity; the test uses the non-default currency precisely so that code which forgets to read the account (writing undefined, '' or the AUD default) fails. The only code it cannot distinguish is one that hard-codes 'NZD', which is not a plausible defect. No failure scenario beyond the test's own purpose."
+    },
+    {
+      "pr": 6,
+      "truth": true,
+      "title": "New onBehalfOf test never checks who gets attributed",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "lines": [
+            79,
+            79
+          ]
+        }
+      ],
+      "note": "True. The test asserts status codes and the balance and never reads the transfer row or the audit entry, so it is blind to D6. A reviewer would ask for an attribution assertion. It is the test gap of D6, not a second defect."
+    },
+    {
+      "pr": 4,
+      "truth": true,
+      "title": "Overdraft test checks status only, misses persistence",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "lines": [
+            79,
+            79
+          ]
+        }
+      ],
+      "note": "True. The HTTP test asserts only the status of the overdraft route, never the body or a follow-up read, so it is blind to D4. Severity overstated: a test gap is not critical in itself; the defect it hides is."
+    },
+    {
+      "pr": 4,
+      "truth": true,
+      "title": "canCover test bypasses store, misses lost overdraft",
+      "sites": [
+        {
+          "file": "test/transfers.test.js",
+          "lines": [
+            71,
+            71
+          ]
+        }
+      ],
+      "note": "True. canCover is unit-tested with a hand-built object, so the store's stripping of overdraftCents is never exercised. The test gap of D4; same note on severity."
+    },
+    {
+      "pr": 7,
+      "truth": true,
+      "title": "Literal JSON null body crashes the export route (500)",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            102,
+            102
+          ]
+        }
+      ],
+      "note": "True. readJson returns JSON.parse's value as is, so a body of the literal text null makes body === null and `const { name } = body` throws, answered as a 500 instead of a 400. Introduced at this line by the PR; the same class exists on main for /transfers, which destructures its body too, so it is a fair medium rather than a new vulnerability."
+    },
+    {
+      "pr": 1,
+      "truth": true,
+      "title": "Paged transfers test can't detect the off-by-one slice bug",
+      "sites": [
+        {
+          "file": "test/transfers.test.js",
+          "lines": [
+            71,
+            71
+          ]
+        }
+      ],
+      "note": "True. The paging test uses three transfers, below PAGE_SIZE, so it passes with either slice end. The test gap of D1. Severity overstated for a test gap; the defect it hides is high."
+    },
+    {
+      "pr": 8,
+      "truth": true,
+      "title": "Withdrawal never re-checks /summary after mutating totals",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "lines": [
+            79,
+            79
+          ]
+        }
+      ],
+      "note": "True. The HTTP test reads the summary after the deposit and only the balance after the withdrawal, so it is blind to D9. The test gap of D9."
+    },
+    {
+      "pr": 8,
+      "truth": false,
+      "title": "Withdraw's closed-account 409 path is never tested",
+      "sites": [
+        {
+          "file": "test/transfers.test.js",
+          "lines": [
+            71,
+            71
+          ]
+        }
+      ],
+      "note": "False as a finding. The statement is true, but the finding itself verified the code is correct; an untested correct path has no failure scenario, and the skill defines a finding as a defect with one. A coverage note, not a defect."
+    },
+    {
+      "pr": 2,
+      "truth": true,
+      "title": "Control regex misses C1 and Unicode line separators",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            7,
+            7
+          ]
+        }
+      ],
+      "note": "True. The PR's own rule is one printable line; U+0080\u2013U+009F are control characters and U+2028/U+2029 are line separators, and all pass the ASCII-only regex into storage and the CSV, where csvCell quotes only on comma, quote and newline. Severity overstated: medium, not high."
+    },
+    {
+      "pr": 9,
+      "truth": true,
+      "title": "seed script still passes label, not name",
+      "sites": [
+        {
+          "file": "scripts/seed.mjs",
+          "lines": [
+            26,
+            27
+          ]
+        }
+      ],
+      "note": "True, and not planted: renaming openAccount's parameter from label to name also broke scripts/seed.mjs in this PR (it now throws 'label is required'), the same class of defect planted as D3 in PR #3. The author's accident, caught by the review. Severity: medium, as D3 is rated; critical overstates a seed script."
+    },
+    {
+      "pr": 3,
+      "truth": false,
+      "title": "No test ever has ownerId differ from actor",
+      "sites": [
+        {
+          "file": "test/accounts.test.js",
+          "lines": [
+            9,
+            9
+          ]
+        }
+      ],
+      "note": "False as a finding. True that nothing exercises the new ownerId override, but the override is correct and nothing fails; a coverage note on correct code, not a defect."
+    },
+    {
+      "pr": 10,
+      "truth": false,
+      "title": "Audit test's single transfer never exercises recipient-side or cross-account scoping",
+      "sites": [
+        {
+          "file": "test/server.js",
+          "lines": [
+            79,
+            79
+          ]
+        },
+        {
+          "file": "test/server.test.js",
+          "lines": [
+            79,
+            79
+          ]
+        }
+      ],
+      "note": "False as a finding. The route is correct (the finding does not claim otherwise); the test could be stronger, but an untested correct path has no failure scenario. A coverage note, not a defect."
+    },
+    {
+      "pr": 10,
+      "truth": false,
+      "title": "Audit route scans the entire global collection, unpaginated",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            87,
+            87
+          ]
+        }
+      ],
+      "note": "False as a finding. Every list in this service scans its in-memory collection; the audit route does what listAccounts and transfersFor do, on a JSON-file store that is whole in memory by design. No failure at any scale the service is built for; the response stays bounded to the account. A design remark, rated low by the review itself."
+    },
+    {
+      "pr": 5,
+      "truth": true,
+      "title": "Accountant can close and export any account",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "lines": [
+            79,
+            79
+          ]
+        }
+      ],
+      "note": "True. The accountant test exercises the two read routes only, so it is blind to D5. The test gap of D5, worded as the defect itself; critical overstates a test gap."
     }
   ]
 }

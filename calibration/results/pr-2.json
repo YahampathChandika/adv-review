@@ -1,0 +1,273 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "15dd7c4aaa0be03d4171fb77b94b233d29f75046",
+  "angles": [
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "csv-export-interaction",
+      "source": "scout"
+    },
+    {
+      "title": "regex-completeness",
+      "source": "scout"
+    },
+    {
+      "title": "security",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema/migration files touched (src/migrations/ untouched) and no change to on-disk row shape; store.js and migrations are unaffected by this diff."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "No new or changed entry point, route, or permission check \u2014 transfer()'s existing owner/role checks (from/to ownership, currency, closed account) are untouched; actorId/record() call is unchanged by this diff."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR adds a module-level CONTROL regex to src/transfers.js and, after the existing length/type check, runs `memo = memo.replace(CONTROL, '')` \u2014 silently stripping ASCII control characters from the memo before storing it \u2014 rather than throwing the documented 400. It also updates README to claim control characters are refused with 400, and adds one test, but that test's try/catch has no assertion that a throw occurred, so it passes regardless of whether refusal actually happens.",
+  "confirmed": [
+    {
+      "title": "Control characters are stripped, not refused",
+      "file": "src/transfers.js",
+      "line": 20,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "transfer() validates memo type/length but then silently strips control characters with memo.replace(CONTROL, '') and lets the transfer succeed, instead of throwing HttpError(400) as the PR's title, description, and the README rule it adds all claim it does.",
+      "summary": "transfer() silently strips control characters from a memo and still succeeds, instead of refusing the memo with HttpError(400) as the PR's title, stated intent, and the README text it added all claim.",
+      "failure": "transfer(store, user, { fromId, toId, amountCents, memo: 'rent\\x00\\x1fnewline\\ninside' }) does not throw; it returns (and persists) a transfer row with memo silently mutated to 'rentnewlineinside', when the PR's title/description/README all specify the call should be refused with HttpError(400).",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control characters are stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "transfer() strips, never refuses, control chars"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control-char memos are stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control chars silently stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control chars are stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 16,
+          "title": "Control characters are stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control characters silently stripped, not refused"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "tests-that-dont-test",
+        "boundary-contract",
+        "silent-drops",
+        "csv-export-interaction",
+        "security",
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js around the hunk: after the length/type check, line 20 does `memo = memo.replace(CONTROL, '')` and then falls through to perform the transfer normally (debits/credits balances, inserts the transfer row with the stripped memo, records the audit entry, returns the row) \u2014 there is no throw anywhere for the control-character case. Confirmed the route is reachable: src/server.js:83 calls `transfer(store, user, body)` directly from the HTTP POST /transfers handler with no memo validation beforehand, so a client-supplied memo reaches this code unfiltered. I ran the actual checked-out code directly (not a mock): called transfer() with memo = 'rent' + NUL + 0x1f + '\\n' + 'inside'. Result: no exception thrown; the returned row and the row persisted in the store both have memo exactly \"rentinside\" (control characters silently removed, transfer completed, balances moved). This directly contradicts the PR title ('Refuse control characters in memos'), its stated intent (refuse with 400), and the new README line ('A memo with a control character in it is refused with 400'). I also ran the full test suite (`npm test`): all 23 tests pass, including the PR's own new test 'a memo with a control character is refused' \u2014 but that test's body is `try { transfer(...) } catch (err) { assert.match(err.message, /control/) }` with no fallback assertion/fail when no exception is thrown, so it passes vacuously precisely because transfer() does not throw. This is a textbook case of a test that cannot fail. Nothing upstream or downstream (schema, caller, framework) rejects or re-validates the memo, so the described failure is fully reachable and reproducible exactly as claimed.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "New memo test has no live assertion",
+      "file": "test/transfers.test.js",
+      "line": 71,
+      "category": "test-coverage",
+      "severity": "critical",
+      "rootCause": "The new test 'a memo with a control character is refused' puts its only assertion (assert.match on err.message) inside the catch block with nothing asserted or failed on the try path, so the test passes identically whether transfer() throws or silently succeeds \u2014 a vacuous/tautological test that cannot detect the actual (non-refusing) behavior.",
+      "summary": "The new test 'a memo with a control character is refused' puts its only assertion inside a catch block with nothing after the try, so it passes whether transfer() throws or not.",
+      "failure": "transfer(store, member, { fromId, toId, amountCents: 1, memo: 'rent\u0000bad' }) returns successfully (does not throw) with the stored row's memo silently sanitized to \"rentbad\" (control character stripped, not refused) \u2014 contradicting both the PR's stated intent and the updated README rule that such a memo is 'refused with 400'. The new test 'a memo with a control character is refused' cannot catch this because its only assertion (assert.match on err.message) lives inside a catch block with no assertion on the try path and nothing after the try/catch, so when transfer() returns normally (as it does) the catch is skipped, zero assertions run, and node --test reports the test green regardless of actual behavior.",
+      "sites": [
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New memo test has no live assertion"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New test never asserts the refusal happens"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New control-char test passes with no exception"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New control-character test passes regardless of behavior"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New test passes whether or not refusal happens"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 70,
+          "title": "New control-character test cannot fail"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New control-character test passes regardless of behavior"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New control-character test can't catch the gap"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test",
+        "correctness",
+        "boundary-contract",
+        "silent-drops",
+        "csv-export-interaction",
+        "security",
+        "data-integrity",
+        "regex-completeness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js at the PR head: the memo handling block (lines 16-21) does `memo = memo.replace(CONTROL, '')` \u2014 it silently strips control characters and lets the transfer proceed; it never throws for a control character. Read test/transfers.test.js lines 71-78: the new test's body is exactly `try { transfer(...) } catch (err) { assert.match(err.message, /control/) }` with nothing before, between, or after \u2014 no assert.fail, no assert.throws, no code following the try/catch. Ran `npm test`: all 23 tests pass including 'a memo with a control character is refused'. Ran a standalone script (importing accounts.js/transfers.js/helpers.js directly) calling transfer() with memo 'rent'+NUL+'bad': it returned normally with row.memo === \"rentbad\" (control char silently stripped, no exception) \u2014 exactly the claimed behavior. Because transfer() does not throw, the catch block is never entered, so assert.match never executes; the test has zero live assertions and passes vacuously. This also means the PR's stated intent (refuse with 400) is not implemented \u2014 the memo is sanitized, not rejected \u2014 yet the test and `npm test` give no signal of that gap. The defect is real, reproducible, and introduced by this diff (the test and the sanitize-instead-of-throw behavior are both new in this commit).",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Control regex misses C1 and Unicode line separators",
+      "file": "src/transfers.js",
+      "line": 7,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "The new CONTROL character class (/[\\x00-\\x1f\\x7f]/g) only matches ASCII C0 controls and DEL, missing Unicode C1 controls (U+0080-U+009F) and Unicode line/paragraph separators (U+0085 NEL, U+2028, U+2029), so those characters bypass the memo filter entirely and reach storage and the CSV export (whose csvCell regex /[\",\\n]/ also doesn't quote around them) unmodified.",
+      "summary": "CONTROL only matches ASCII C0 controls and DEL (/[\\x00-\\x1f\\x7f]/g), so Unicode C1 controls (U+0080-U+009F) and the Unicode line/paragraph separators U+2028/U+2029 are neither refused nor stripped, letting them reach storage and the CSV export unmodified even though the README (line 46) now states 'A memo is one line ... A memo with a control character in it is refused with 400.'",
+      "failure": "transfer(store, member, { fromId, toId, amountCents: 1, memo: 'rent\u2028x' }) succeeds (no 400) and stores row.memo === 'rent\u2028x' unchanged; exportTransfers() then writes that literal U+2028 character unquoted into the memo CSV cell (confirmed by running the actual code), since neither the CONTROL regex nor csvCell's /[\",\\n]/ test covers U+2028/U+2029 or the C1 control range U+0080-U+009F. Additionally, even characters the regex does match (NUL, C0, DEL) are silently stripped rather than causing a 400, so the README's new 'is refused with 400' line is inaccurate for any control character, not only the uncovered Unicode ones.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 7,
+          "title": "Control regex misses C1 and Unicode line separators"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 7,
+          "title": "Unicode line separators bypass the new filter"
+        }
+      ],
+      "foundBy": [
+        "regex-completeness",
+        "csv-export-interaction"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Checked out the PR head and read src/transfers.js and src/export.js directly. CONTROL = /[\\x00-\\x1f\\p{Cc}... /g is actually /[\\x00-\\x1f\\x7f]/g \u2014 only ASCII C0 controls + DEL. Ran `'rent\u2028x'.replace(CONTROL,'')` etc.: U+2028, U+2029, U+0085 (C1 NEL), U+009B (C1 CSI) all pass through completely unchanged; only \\x00/\\x1f/\\x7f get stripped. Then ran the real transfer() end to end via test/helpers.js's freshStore: transfer(store, member, {..., memo: 'rent\u2028x'}) returned a row whose memo was byte-for-byte identical to the input. Ran exportTransfers() on that store: the resulting CSV file contained the literal U+2028 character in the memo cell with no surrounding quotes, because export.js's csvCell only tests /[\",\\n]/ (confirmed by reading export.js). Also ran `node --test`: all 23 tests pass, including the PR's new test, which is written as `try { transfer(...) } catch (err) { assert.match(err.message, /control/) }` with no assertion outside the catch block -- it is a tautology that passes identically whether transfer throws or not. This corroborates that transfer() never throws 400 for any control character (ASCII or Unicode); it silently strips the ASCII ones (memo = memo.replace(CONTROL, '')) and leaves C1 controls and Unicode line/paragraph separators completely untouched, contradicting the README's new line 'A memo with a control character in it is refused with 400.' Every specific assertion in the claim -- the regex's exact scope, the Unicode characters bypassing it, the memo reaching storage unmodified, and the CSV export writing it unquoted -- was independently reproduced against the real code, not just read.",
+      "verifiedBy": [
+        "refute:p3.1",
+        "refute:p3.2",
+        "refute:p3.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "export.js's own CSV quoting is a second, untouched enforcement point with the same blind spot as the regex, and it alone defeats the PR's stated goal. csvCell() (src/export.js:5-8) only wraps a cell in quotes when it matches /[\",\\n]/ \u2014 it does not recognize U+2028/U+2029 (Unicode line/paragraph separator) or any C1 control (0x80-0x9F, e.g. NEL U+0085) as needing escaping. I reproduced this directly: a memo of 'rent' + NUL + U+2028 + 'due' passes transfer() (becomes \"rent\u2028due\" \u2014 NUL stripped, U+2028 not), and exportTransfers() writes it into the CSV completely unquoted: a raw line-separator character sitting inside an unquoted data cell. So even if someone later widens the CONTROL regex to also strip C1/line-separator characters (fixing the already-reported regex-completeness gap), the CSV file would still be unsafe for any reader that treats U+2028/U+2029/NEL as a line break (many Unicode-aware line-splitters, and Excel/Numbers on paste) \u2014 because the fix this PR needs lives in a file the diff never touches, and no listed angle inspected export.js's quoting predicate itself.",
+      "why": "regex-completeness scoped its search to the CONTROL regex in transfers.js and never opened export.js; csv-export-interaction apparently checked whether the (now-sanitized) memo flows into the CSV but not whether the CSV writer's own escaping covers the character classes the sanitizer misses \u2014 it's a second, independent gate with a different (narrower) definition of 'unsafe', and nothing in the diff touches or tests it. Only actually running transfer() -> exportTransfers() and inspecting the raw file bytes surfaces that the two gates compound rather than one covering for the other."
+    },
+    {
+      "what": "The silent mutation (memo = memo.replace(CONTROL, '')) has no forensic trail. audit.js's record(store, actorId, action, target) (src/audit.js:8) never stores write content \u2014 only actorId/action/target id \u2014 and this was true before the PR too. So once transfer() silently rewrites a caller's submitted memo, the original value the caller sent is gone everywhere: not in the stored row (only the stripped result is kept), not in the audit log (never carried content), not in the HTTP response (echoes the stripped value). For a system whose README rule explicitly is 'every write is audited under the user who made it', a write whose stored content now silently diverges from what was requested, with zero record of that divergence, undercuts the one guarantee this codebase advertises about writes \u2014 and it's a consequence of this PR's choice to mutate rather than reject, not a pre-existing concern this PR left alone.",
+      "why": "authz-and-attribution was scoped (correctly) to permission checks and the actorId passed to record() \u2014 it wasn't asked whether record() captures enough to reconstruct what was actually submitted versus stored. data-integrity's reported findings don't mention it either. It only shows up if you ask 'after this silent edit, can anyone ever prove what the caller actually sent?' \u2014 a question about the audit subsystem's adequacy for a new kind of divergence this diff introduces, not about whether the diff's own logic is correct."
+    },
+    {
+      "what": "The check is write-path-only with no backfill, in an architecture whose rollout doctrine (docs/deploy.md) only ever talks about schema compatibility, not data-invariant remediation. Any transfer row already in a ledger file from before this deploy (seeded data, or any pre-patch production file) that contains a control character in its memo is untouched by this change \u2014 transfer() only sanitizes on the way in, store.js has no migration touching the transfers collection, and exportTransfers() exports every row in the collection unconditionally. So for pre-existing rows, the exact failure the PR's description says it's closing ('nothing stopped a client from putting a newline or a NUL into a memo, and it then landed in the CSV export') keeps happening indefinitely for data written before this release, with nothing in the codebase's own migration/rollout story built to catch a data-shape problem that isn't a schema change.",
+      "why": "migrations-and-rollout was ruled out precisely because no schema or on-disk row shape changed \u2014 correctly, since SCHEMA and store.js are untouched \u2014 but that reasoning only covers schema compatibility, not whether already-persisted values now violate a newly-added content invariant. That's a question about stale data under a new rule, a different axis than any of the eight angles (none of which is 'does old data already violate the new rule'), and it falls through the gap between 'no schema change' (true) and 'no stale-data concern' (not examined)."
+    }
+  ],
+  "counts": {
+    "raw": 17,
+    "rootCauses": 3,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 3,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 20,
+    "scout": 1,
+    "finders": 8,
+    "triage": 1,
+    "skeptics": 9,
+    "critic": 1,
+    "retries": 0
+  }
+}

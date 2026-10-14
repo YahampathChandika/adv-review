@@ -1,0 +1,137 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "be23305b3c846e94b25272aaabde16aa55e3fc21",
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No file under src/migrations/ is touched and no Store SCHEMA key changes. export.js writes the CSV directly via fs.writeFile, never through Store.insert/pick, so the two-copies-one-file rollout hazard docs/deploy.md describes (which governs the JSON store, not ad-hoc output files) does not apply to this code path. There is no backfill, no deploy-order dependency, and nothing in-repo reads an old-format export back in."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "The route /accounts/:id/export, its requireUser wrapper, and the getOwnAccount ownership check are all unchanged by this diff -- verified in src/server.js and src/accounts.js. No new entry point is added and no identity/ownership derivation is touched; the diff only changes what bytes an already-authorized call writes into the CSV body."
+    },
+    {
+      "title": "security",
+      "why": "The only new data flowing into the CSV is account.currency, which openAccount() (src/accounts.js) restricts to a 3-item enum (AUD/NZD/USD) validated at creation and never mutated afterward by any route -- so it is never attacker-controlled free text. csvCell (the escaping function) is untouched by this diff. No redirects, CORS, secrets, or third-party calls are touched; the existing path-traversal test for the export route still passes unchanged."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No change to concurrency, caching, retries, or storage growth. Export remains a stateless recompute-and-overwrite of one file per call, exactly as before this diff; only the content of each line changed."
+    },
+    {
+      "title": "silent-drops",
+      "why": "The new test (test/server.test.js) drives a non-default currency (NZD, vs. the AUD default) end-to-end through HTTP -> store -> export -> file and asserts the exact value lands in the exact column; this passes under npm test. The export path writes straight to a CSV string via fs.writeFile and never goes through Store.insert/pick, so the SCHEMA-stripping mechanism that motivates this angle elsewhere in the repo (src/store.js's pick) structurally cannot apply to this write."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds a `currency` column to the per-account CSV transfer export, inserted between `amountCents` and `memo`, sourced from the exporting account's own `currency` field (not a per-transfer value). Updates the README's route description and adds one new test asserting the header position and an escaped-memo row value for a non-default currency (NZD).",
+  "confirmed": [
+    {
+      "title": "New currency test never varies the currency value",
+      "file": "test/server.test.js",
+      "line": 90,
+      "category": "test-coverage",
+      "severity": "medium",
+      "rootCause": "The new currency-export test hardcodes the same literal currency ('NZD') on both accounts and asserts against that same literal, so it cannot detect whether the code actually reads account.currency versus a hardcoded value.",
+      "summary": "The only test that checks the exported row's currency value uses the literal 'NZD' for both accounts involved and asserts on that same literal, so the test passes even if the code never reads the account's actual currency field at all.",
+      "failure": "Not applicable \u2014 the finder's described failure (a hardcoded 'NZD' literal in place of `account.currency` ships green) is exactly what I reproduced; no correction needed.",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "line": 90,
+          "title": "New currency test never varies the currency value"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "I reproduced the finder's mutation directly: in src/export.js I replaced `account.currency` with the hardcoded literal `'NZD'` in the row-building array and reran the full suite (`node --test`). All 23 tests passed, including 'each exported row carries the account's currency' (test/server.test.js:79-94) and the header test (test/server.test.js:64-77). I also confirmed by grep that the only test exercising a data row for export uses `currency: 'NZD'` for both account a (the one exported) and account b, and the only other export test (lines 64-77) opens an account with no currency specified (so it defaults, per the unrelated test at line 26, to 'AUD') and performs no deposit/transfer, so no data row is ever written there \u2014 the currency value is never checked against anything but the same constant it's seeded with. So the claim is verified exactly as stated: this test suite cannot distinguish `account.currency` from a hardcoded `'NZD'` literal, directly undercutting the PR's stated intent of sourcing the value from the exported account. I restored src/export.js to the original PR content afterward and reran the suite to confirm the worktree is back to the PR's actual (non-mutated) state.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    }
+  ],
+  "refuted": [
+    {
+      "title": "New export column inserted mid-row, not appended",
+      "file": "src/export.js",
+      "line": 17,
+      "category": "boundary-contract",
+      "severity": "medium",
+      "rootCause": "The currency column is inserted mid-row (between amountCents and memo) rather than appended at the end, shifting the positional index of every subsequent column (memo, createdAt) for any CSV consumer that reads by column position.",
+      "summary": "The PR adds `currency` between `amountCents` and `memo` in the transfer-export CSV, shifting the position of every column after it (`memo` moves from index 4 to 5, `createdAt` from 5 to 6), instead of appending the new column at the end.",
+      "failure": "exports/*.csv is the one artifact this feature produces for consumption outside the process (nothing in this repo parses it back \u2014 I checked src/, scripts/seed.mjs and test/ and found no in-repo reader, confirming the file exists solely for an external reader, exactly the kind of boundary whose contract is the header line). Any such external reader that already treats column 5 as memo and column 6 as createdAt (an ordinary way to consume a flat CSV from a script, spreadsheet macro, or accounting import) will, from the moment this ships, read an account's currency code (e.g. 'NZD') into what it treats as the memo field, and misread createdAt as a column it no longer is \u2014 with no error raised, since CSV carries no schema enforcement. The PR's own description and the README update ('CSV (with the account's currency)') do not flag this as a breaking shape change; they present it as a simple addition. A genuinely additive change (appending `currency` as the last column, after createdAt) would have kept every existing column's position stable and avoided this risk entirely \u2014 and is consistent with this codebase's own stated convention elsewhere (docs/deploy.md: 'migrations are additive first... readers tolerate both shapes') for changes that external readers depend on.",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "line": 17,
+          "title": "New export column inserted mid-row, not appended"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "why": "The positional fact is accurate: before this PR the header was `id,fromId,toId,amountCents,memo,createdAt` and this diff inserts `currency` at index 4, so `memo` moves from index 4\u21925 and `createdAt` from 5\u21926 (confirmed by reading src/export.js before/after and the updated test assertions at test/server.test.js:72,89). But the claimed failure rests entirely on a hypothetical external reader that parses this CSV by fixed column position. I grepped the whole repo (src/, scripts/seed.mjs, test/) and confirmed, as the finder did, that there is no in-repo reader of exports/*.csv \u2014 the directory is even gitignored (.gitignore:6 `exports/`), so it isn't a tracked, versioned artifact either. There is no changelog, schema doc, or any other evidence in the repo that the CSV's column order is a stable contract readers depend on by position (as opposed to by header name, which is how most real CSV consumers \u2014 pandas, Papa Parse, csv.DictReader, spreadsheet imports with headers \u2014 actually work). The cited precedent, docs/deploy.md's 'migrations are additive first / readers tolerate both shapes,' is about the internal JSON ledger file during a live two-process rolling deploy (old and new code reading/writing the same file concurrently) \u2014 a materially different scenario from a point-in-time CSV export consumed by some unspecified external party \u2014 so it doesn't actually establish an additive-only convention for this file. Finally, the exact column position (`currency` immediately after `amountCents`) was an explicit, deliberate part of the PR's stated intent ('positioned immediately after amountCents... so a statement is readable without external context'), not an inadvertent side effect. Given no concrete consumer, no documented contract, and a position that was intentionally requested, the breaking-change claim is speculative rather than demonstrated, so I refute it \u2014 though the underlying mechanical observation (columns do shift) is true, which is why I'm not fully certain.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "dismissedAsUnsure": false
+    }
+  ],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The diff inserts the new `currency` column in the middle of the CSV's existing column order (src/export.js:17,19: header becomes id,fromId,toId,amountCents,currency,memo,createdAt), shifting `memo` from position 5\u21926 and `createdAt` from 6\u21927. The PR's own stated intent describes this CSV as 'a statement... readable without external context', implying it is handed to consumers outside this codebase. Any such consumer parsing the file positionally (by column index rather than header name) silently receives wrong values for the shifted columns, with no versioning or changelog note accompanying the change.",
+      "why": "migrations-and-rollout was explicitly scoped to the JSON Store's SCHEMA and 'nothing in-repo reads an old-format export back in' \u2014 i.e. it reasoned about in-repo readers, not the external statement file the PR's own description says this column exists for. silent-drops was scoped to Store.pick() stripping unlisted keys. data-integrity was scoped to concurrency/caching/storage growth. correctness, tests-that-dont-test, and boundary-contract all evaluate the code's internal behavior, not the exported file's column order as an external, position-sensitive interface. No angle's stated reasoning covers a breaking reorder of an already-shipped file format for parties who never read this diff."
+    }
+  ],
+  "counts": {
+    "raw": 2,
+    "rootCauses": 2,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 1,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 7,
+    "scout": 1,
+    "finders": 3,
+    "triage": 1,
+    "skeptics": 1,
+    "critic": 1,
+    "retries": 0
+  }
+}

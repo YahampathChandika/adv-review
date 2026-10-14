@@ -1,0 +1,246 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "036830a04e80ca63d934f178397b7d640e59d0cc",
+  "angles": [
+    {
+      "title": "security",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "docstring-contradicts-code (invariant regression)",
+      "source": "scout"
+    },
+    {
+      "title": "log-injection / log-forging via the new warn line",
+      "source": "scout"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration files, schema changes, or data-shape changes are touched by this diff; it only changes a route handler, an export helper's signature, and a log statement. No deploy-order or backfill concern applies."
+    },
+    {
+      "title": "data-integrity",
+      "why": "The export write is a fire-and-forget CSV dump keyed by filename, not a record update; there's no concurrent-edit, cache-invalidation, or retry-idempotency surface here, and no new unbounded collection is introduced (one extra file per export call, same as before)."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR lets POST /accounts/:id/export accept an optional { name } that names the output CSV file instead of the account id, and reports which file was written; separately, requireUser now logs method/URL/Authorization-header on every failed authentication attempt. Both changes touch security-sensitive code paths that carried explicit documented invariants (no path escape, token never logged) which the new code appears to break.",
+  "confirmed": [
+    {
+      "title": "Export name allows path traversal to arbitrary write",
+      "file": "src/export.js",
+      "line": 18,
+      "category": "path-traversal",
+      "severity": "critical",
+      "rootCause": "exportTransfers (src/export.js:18) joins the caller-supplied `name` straight into the output path with only a type/length check in server.js (no basename/traversal sanitization, unlike the removed path.basename(account.id) behavior), so a `name` containing '/' or '..' writes the CSV outside exports/ — and the new tests (test/server.test.js:74,87) only cover a benign and an over-length name, never a traversal payload, so they pass regardless of the hole.",
+      "summary": "The caller-supplied `name` for /accounts/:id/export is only checked for type and length (1-64 chars), never for path separators or `..`, and is joined into the file path unsanitized, letting any authenticated user write a CSV to any writable path on the host.",
+      "failure": "Confirmed exactly as claimed: POST /accounts/{ownId}/export with body { name: '../../../../../../tmp/pwned-test' } from an authenticated owner of any account returns 200 { exported: 0, file: 'pwned-test.csv' } while actually writing the CSV to /var/tmp/pwned-test.csv, outside the configured exports directory - live-reproduced via test/helpers.js serve().",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Export name allows path traversal to arbitrary write"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Named export lets caller write outside exports dir"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "name field enables path traversal in export write"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Unsanitized name enables path-traversal file write"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "name param lets caller write files outside exports/"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 74,
+          "title": "New name tests never exercise path traversal"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Named export escapes exports dir; response masks it"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 87,
+          "title": "New export tests miss path-traversal case"
+        }
+      ],
+      "foundBy": [
+        "security",
+        "boundary-contract",
+        "authz-and-attribution",
+        "docstring-contradicts-code (invariant regression)",
+        "correctness",
+        "tests-that-dont-test",
+        "silent-drops"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Live-reproduced against the actual code at the PR head using the repo's own test/helpers.js (freshStore/serve, no mocks). Validation in src/server.js:103 checks only typeof and 1-64 length; it never rejects '/' or '..'. exportTransfers in src/export.js:18 does path.join(dir, `${name ?? account.id}.csv`), which does not confine the write to dir. POST /accounts/:id/export as tok-bob (owner) with body { name: '../../../../../../tmp/pwned-by-ledger-export' } returned 200 {exported:0, file:'pwned-by-ledger-export.csv'} (the response's apparent safety comes only from path.basename(file) being applied to the OUTPUT, not to the write path), while the actual file was written to /var/tmp/pwned-by-ledger-export.csv — confirmed via `ls -la` and `cat`, containing the real CSV header row, well outside the server's configured exports/ directory (verified with node -e that path.join reproduces this resolution, and that /tmp and /var/tmp are both symlinked to /private/... on this host, matching the exact path the claim cites). The pre-diff code used path.basename(account.id), which structurally prevented this, and the removed docstring's 'cannot name a path outside dir' guarantee is genuinely broken now. The new tests at test/server.test.js (lines 74 and 77 in the final file) only pass 'statement-2026' and a 65-char string — neither contains a path separator or '..', so they do not exercise this hole at all. All 8 cited sites describe the same confirmed root cause from different angles (security, boundary-contract, authz framing, docstring regression, correctness, missing test coverage, response masking the real write location) and each holds under inspection; I found no site where the defect fails to apply.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Failed-auth logging prints the raw bearer token",
+      "file": "src/auth.js",
+      "line": 25,
+      "category": "secrets-in-logs",
+      "severity": "high",
+      "rootCause": "requireUser's new console.warn (src/auth.js:25) logs ctx.req.headers.authorization verbatim on every failed authentication, printing the raw 'Bearer <token>' credential and directly contradicting the file's own top-of-file comment that the token is never logged.",
+      "summary": "requireUser now logs the full Authorization header (including a live/recently-valid bearer token) to console.warn on every failed authentication, contradicting this file's own 'the token is the only credential; it is never logged' comment.",
+      "failure": "No correction needed — claim verified exactly as stated: a failed-auth request whose Authorization header is 'Bearer tok-nobody' (or any other guessed/stale bearer token) causes that raw header value to be printed via console.warn on every such request, reproduced verbatim by running `npm test`.",
+      "sites": [
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed-auth logging prints the raw bearer token"
+        },
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed sign-in log prints the bearer token itself"
+        },
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed sign-in log line leaks the bearer token"
+        },
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed sign-in log line leaks bearer token"
+        },
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed sign-in log prints the raw bearer token"
+        }
+      ],
+      "foundBy": [
+        "security",
+        "boundary-contract",
+        "authz-and-attribution",
+        "docstring-contradicts-code (invariant regression)",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/auth.js: the diff adds `console.warn('sign-in failed', ctx.req.method, ctx.req.url, 'with', ctx.req.headers.authorization ?? '(no token)')` inside requireUser's failure branch (line 25), directly beneath the file's top-of-file comment 'The token is the only credential; it is never logged.' Confirmed via the diff that this line is newly introduced by this PR (previously the branch was just `if (!user) throw new HttpError(401, 'sign in first')`). Verified reachability: requireUser wraps nearly every real route in src/server.js (accounts, transfers, deposits, export, etc.), so any unauthenticated or wrongly-authenticated request to ordinary traffic triggers this path, not just a contrived test. Checked test/helpers.js, which builds the header as `Bearer ${token}` (e.g. `Bearer tok-nobody`), confirming the logged value is the literal bearer credential, not a redacted or hashed form. Ran `npm test` and observed the exact literal output: `sign-in failed GET /accounts with Bearer tok-nobody`, matching the test token at test/server.test.js:14 verbatim. Searched the whole src/ tree for any redaction/masking/log-level gating around this console.warn or elsewhere (grep for `console.`) — none exists; it is unconditional. The defect is real, reachable from production routes, introduced by this diff, and directly contradicts the file's own documented invariant.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Literal JSON null body crashes the export route (500)",
+      "file": "src/server.js",
+      "line": 102,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "The export route's `const { name } = body` (src/server.js:102) destructures without guarding against body being the literal JSON value null, which readJson passes through as-is, so a request body of the text `null` throws and is caught by the generic 500 handler instead of being treated as a normal bodyless request.",
+      "summary": "The new line `const { name } = body` destructures `body` without guarding for it being `null`; readJson returns the parsed JSON value as-is, so a request body of the literal text `null` (valid JSON) makes `body === null`, and destructuring null throws, which is caught by the generic 500 handler instead of being treated as a normal (bodyless) request.",
+      "failure": "POST /accounts/:id/export with header content-type: application/json and raw body text `null` returns HTTP 500 {\"error\":\"internal error\"} instead of behaving like a request with no name (its previous, and otherwise equivalent, un-bodied behavior). I reproduced this against the running server: the server logged `request failed POST /accounts/<id>/export TypeError: Cannot destructure property 'name' of 'body' as it is null.` at src/server.js:102 and returned status 500. Every other handler in this file that uses `body` does so via object spread (`{ ...body, ... }`) or passes it to a helper that tolerates null, which is why this crash is specific to the new code path; it did not exist before this diff touched this handler (the previous handler never referenced `body` at all).",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 102,
+          "title": "Literal JSON null body crashes the export route (500)"
+        }
+      ],
+      "foundBy": [
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js: readJson (lines 22-34) returns `{}` only when the body is empty; otherwise it returns `JSON.parse(raw)` as-is, with no null-check. A literal request body of the text `null` is valid JSON, so JSON.parse('null') === null, and readJson returns null. The export handler (line 102, `const { name } = body`) destructures that null directly with no guard. This throws a TypeError, which is not an HttpError, so createServer's catch-all (src/server.js ~120-124) treats it as a 500 and returns {\"error\":\"internal error\"}, logging via console.error. I reproduced this by starting the real server (createServer) in-process, creating an account via tok-bob, then POSTing to /accounts/:id/export with header content-type: application/json and raw body text 'null'. Observed: status 500, body {\"error\":\"internal error\"}, and a logged TypeError 'Cannot destructure property name of body as it is null' at src/server.js:102 -- exactly matching the claim's cited reproduction. Confirmed this is newly introduced by the diff: the pre-diff handler never referenced `body` at all (it only used store/user/params/exportDir), so the old code path for a bodyless or null-body request never crashed; the new destructuring line is the sole cause. No other guard exists upstream (requireUser only checks the user, not body shape) and no test in test/server.test.js exercises a literal `null` body. Severity MEDIUM is reasonable: it's a real but narrow correctness bug (unusual but valid client input causes a 500 instead of graceful 400/'no name given' handling), not a security hole.",
+      "verifiedBy": [
+        "refute:1"
+      ]
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/server.js:114 + src/export.js:18 — `exportDir` is a single flat directory shared by every account/owner on the server, and the new `name` parameter has no uniqueness or existence check before `writeFile` truncates. Verified by running two different owners (tok-bob, tok-cy) exporting their own distinct accounts with the same `name`: both requests return 200 and the second silently overwrites the first owner's exported CSV on disk, with no error surfaced to either caller and no audit record (`exportTransfers` never calls `record()`). Previously the filename was always the unique `account.id`, so this collision was structurally impossible; the PR introduces it.",
+      "why": "The 'data-integrity' angle was ruled out on reasoning about concurrent-edit/cache-invalidation/retry-idempotency, which doesn't address a new shared-namespace collision between two different tenants' authorized writes. 'authz-and-attribution' doesn't catch it either since each write is individually authorized (owns-the-account check passes); the defect is in the storage namespace the two authorized writes land in, a subsystem neither angle's stated scope covers."
+    },
+    {
+      "what": "src/server.js:103 validates only type and length (1-64 chars) of `name`, not its characters. Verified by calling export with `name: 'sub/dir'` (no `..`, so not the already-reported traversal case): the server throws an uncaught ENOENT from `writeFile` (only the top-level `exportDir` is `mkdir`'d, not any nested path a slash implies) and returns a bare 500, rather than the documented 400 'name must be 1 to 64 characters'.",
+      "why": "This is a different trigger and failure mode from both already-reported bugs: it isn't a traversal/escape (no '..', so it doesn't achieve 'arbitrary write' outside dir — the opposite: it fails), and it isn't the null-JSON-body crash. It's a plausible benign input (e.g. 'Q1/stmt') that 500s instead of validating cleanly, a gap in 'boundary-contract'/'correctness' coverage of the `name` field's character space specifically, as opposed to its type/length already covered by the listed null-body finding."
+    }
+  ],
+  "counts": {
+    "raw": 14,
+    "rootCauses": 3,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 2,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 18,
+    "scout": 1,
+    "finders": 8,
+    "triage": 1,
+    "skeptics": 7,
+    "critic": 1,
+    "retries": 0
+  }
+}

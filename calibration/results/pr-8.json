@@ -1,0 +1,235 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "074592689156ce5df3f42042a91dffbd81dfed27",
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "overdraft-vs-closed-account-ordering",
+      "source": "scout"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "Both new entry points (POST /withdrawals, GET /summary) reuse the exact same requireRole('admin', ...) wrapper as the existing /deposits route, which re-derives identity from the bearer token server-side (auth.js authenticate/requireRole), not from client input. withdraw() calls record(store, admin.id, 'withdrawal', accountId), attributing the action to the authenticated admin, identical in shape to deposit()'s existing record() call. Verified test 'a deposit raises...; a withdrawal lowers...' checks entriesFor(...).map(action) == ['account.open','deposit','withdrawal'], confirming attribution. No new trust boundary or identity-derivation path is introduced beyond the pattern already shipped for deposits."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface (no SQL/HTML/shell/URL construction from user input), no secrets or tokens added to code/logs (auth.js already forbids logging tokens and this diff doesn't touch that), no redirects, no CORS changes, no outbound third-party calls. The only new inputs (accountId, amountCents) go through the same store.get/Number.isInteger validation pattern as deposit's existing, unreviewed-as-new code path."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds admin-only POST /withdrawals (the overdraw-refusing mirror of deposits) and admin-only GET /summary, which reads a per-currency running total from a new `totals` collection seeded by additive migration 003. The intent is that every deposit and withdrawal keeps `totals` current, but `withdraw()` never calls the `bumpTotal` helper that `deposit()` calls, so the running total only ever grows and is confirmed (by direct reproduction) to go stale/wrong after any withdrawal, while every added test stops short of re-checking `summary()` after a withdrawal.",
+  "confirmed": [
+    {
+      "title": "withdraw() never decrements the totals running balance",
+      "file": "src/transfers.js",
+      "line": 68,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "withdraw() in src/transfers.js debits the account's balanceCents but never calls bumpTotal(), so the totals collection backing GET /summary only ever increases from deposits and is never decremented by withdrawals.",
+      "summary": "withdraw() debits the account's balanceCents but never calls bumpTotal (or any totals update), so the new `totals` collection that GET /summary reads from only ever increases, even though real withdrawn money is supposed to be reflected.",
+      "failure": "Deposit 100 AUD into a fresh account, then withdraw 60 AUD. store.get('accounts', id).balanceCents correctly becomes 40, but summary(store) (and thus GET /summary for an admin) still reports { AUD: 100 }. I reproduced this directly: deposit(store, admin, {accountId, amountCents: 100}) followed by withdraw(store, admin, {accountId, amountCents: 60}) leaves summary(store) at { AUD: 100 } while the account balance is 40 — a 60-cent overstatement handed to the admin as 'money held per currency'. The divergence is permanent and compounds with every withdrawal thereafter (deposit() at line 62 calls bumpTotal(store, account.currency, amountCents); the symmetric call — bumpTotal(store, account.currency, -amountCents) — is simply absent from withdraw(), lines 68-80).",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "withdraw() never decrements the totals running balance"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 78,
+          "title": "Withdrawals never update the currency totals"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "Withdrawals never update the totals running total"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 65,
+          "title": "withdraw() never decrements the totals it defines"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "Withdrawals never update the per-currency totals"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "migrations-and-rollout",
+        "boundary-contract",
+        "silent-drops",
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js: deposit() (line 62) calls bumpTotal(store, account.currency, amountCents) right after updating the account balance, but withdraw() (lines 68-80) updates the account balance (lines 74-77) and calls record() (line 78) with no bumpTotal call anywhere in the function. Confirmed via grep across src/ and test/ that bumpTotal is invoked only once in the entire codebase, from inside deposit() — there is no other reconciliation path (no cron, no scan-based recompute, no call to bumpTotal from withdraw or elsewhere) that would correct the totals collection after a withdrawal. The /withdrawals route (src/server.js) is wired exactly like /deposits — requireRole('admin') calling withdraw(store, user, body) then store.save() — so it is directly reachable by any authenticated admin with no additional guard that would prevent this. Ran the full existing test suite (`node --test`): all 24 tests pass on the unmodified PR head, confirming no existing test (including the new 'summary is for administrators and follows deposits' test, which only exercises a deposit then checks the account balance via GET /accounts, never re-checking GET /summary after the withdrawal) catches the gap. I also wrote and ran a standalone repro directly against this worktree's src/transfers.js and src/accounts.js: openAccount -> deposit(100 AUD) -> withdraw(60 AUD) produced `summary = { AUD: 100 }` while `store.get('accounts', id).balanceCents === 40`, exactly matching the claimed failure. Both `totals` (schema addition), `bumpTotal`, `summary`, `withdraw`, and the `/withdrawals`/`/summary` routes are new in this diff, so the defect is correctly attributed as introduced by this diff. Severity CRITICAL is justified: GET /summary is the PR's headline deliverable and silently reports an inflated, permanently-diverging figure to admins as soon as a single withdrawal is made, directly contradicting the PR's own stated intent that totals are 'kept current' by every deposit and withdrawal.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "Withdrawal never re-checks /summary after mutating totals",
+      "file": "test/server.test.js",
+      "line": 79,
+      "category": "test-coverage",
+      "severity": "high",
+      "rootCause": "The new withdrawal tests (in test/server.test.js and test/transfers.test.js) call summary()/GET /summary only before the withdrawal (right after the deposit) and only assert balanceCents/audit entries afterward, never re-checking summary(), so the suite cannot catch withdraw() failing to keep the totals collection current.",
+      "summary": "The new HTTP test checks GET /summary right after the deposit but, after POST /withdrawals succeeds, only re-checks the account's balanceCents and never calls GET /summary again, so it cannot catch the totals collection failing to track withdrawals.",
+      "failure": "src/transfers.js withdraw() never calls bumpTotal (unlike deposit(), which does), so GET /summary / summary(store) keeps reporting money already paid out. Concretely: deposit 50 AUD then withdraw 20 AUD on the same account leaves the real balance at 30 but summary(store) (and GET /summary) still returns {AUD: 50}. Neither test/server.test.js:79-92 nor test/transfers.test.js:71-80 re-checks summary()/GET /summary after the withdrawal (each only re-checks balanceCents and audit entries), so both pass unmodified even with withdraw's effect on totals removed entirely, which is in fact the PR's shipped behavior.",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "Withdrawal never re-checks /summary after mutating totals"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "Unit test for withdraw never re-checks summary()"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New withdrawal tests never re-check the summary"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "New tests exercise withdraw() but never assert summary() afterward"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 206,
+          "title": "New tests check balance, not summary, after withdrawal"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 70,
+          "title": "New tests assert balance, never re-check summary after withdrawal"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 206,
+          "title": "New tests never assert summary after a withdrawal"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test",
+        "migrations-and-rollout",
+        "correctness",
+        "boundary-contract",
+        "silent-drops",
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js in the checked-out worktree: deposit() calls bumpTotal(store, account.currency, amountCents) but withdraw() has no corresponding call — it only updates the account's balanceCents and records an audit entry. Confirmed live by running a script against the worktree's modules: deposit 50 then withdraw 20 on a fresh AUD account leaves the real balance at 30, but summary(store) still returns { AUD: 50 } (stale, overstated by the withdrawn amount). Checked test/server.test.js:79-92 ('the summary is for administrators and follows deposits') — it calls GET /summary after the deposit (line 87, asserting { AUD: 125 }), then after POST /withdrawals (line 88) it only asserts GET /accounts/:id's balanceCents (line 89) and never calls GET /summary again. Checked test/transfers.test.js:71-78 ('a deposit raises the currency's total; a withdrawal lowers the balance and never overdraws') — same pattern: summary(store) is asserted once right after deposit (line 75), then after withdraw() (line 77) only the account's balanceCents is asserted (line 78); summary() is never called again. Ran the full suite (node --test): all 24 tests pass, confirming the stale-totals defect is undetected. This matches the claim's described failure exactly, at the exact line numbers cited across both files.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Withdraw's closed-account 409 path is never tested",
+      "file": "test/transfers.test.js",
+      "line": 71,
+      "category": "test-coverage",
+      "severity": "medium",
+      "rootCause": "No test in the PR calls withdraw() against a closed account, leaving the new 'a closed account cannot pay out' 409 branch completely unexercised.",
+      "summary": "withdraw()'s check order (closedAt before balanceCents<amountCents) is correct — verified by invariant and by a confirming test run against the PR's code — but no test in this diff ever calls withdraw() against a closed account, so the new 'a closed account cannot pay out' 409 branch is completely unexercised.",
+      "failure": "withdraw() in src/transfers.js:72-73 checks account.closedAt before the balance check, same order as deposit(). Since closeAccount() (src/accounts.js:45-46) refuses to close a non-zero-balance account, a closed account's balance is always 0, so for any positive amountCents a withdrawal against a closed account satisfies BOTH 409 conditions simultaneously. I confirmed by running a scratch test (openAccount -> closeAccount -> withdraw(1 cent)) against this worktree's code that it does throw 'cannot pay out' and never 'insufficient funds', so today's behavior is correct. But the only withdraw-specific test added in this diff (test/transfers.test.js, the test titled 'a deposit raises the currency's total; a withdrawal lowers the balance and never overdraws') exercises only the insufficient-funds path (amountCents=51 against a 50-cent open account) and the success path — it never opens-then-closes an account and calls withdraw() on it, and no other test (in test/server.test.js or elsewhere) does either. If a future edit swaps the two checks' order in withdraw(), or a future change to accounts.js lets a non-zero-balance account be closed (breaking the invariant this ordering silently depends on), a withdrawal against a closed account could start returning the wrong 409 message, or — if the balance check were dropped instead of reordered — could succeed in paying out of a closed account. No test anywhere in the suite would catch either regression, since nothing asserts which 409 fires when withdraw() is called against a closed account.",
+      "sites": [
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "Withdraw's closed-account 409 path is never tested"
+        }
+      ],
+      "foundBy": [
+        "overdraft-vs-closed-account-ordering"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Verified every factual piece of this claim directly in the worktree. src/transfers.js:68-80 shows withdraw() checks `account.closedAt` (line 72, throws 409 'a closed account cannot pay out') strictly before `account.balanceCents < amountCents` (line 73, throws 409 'insufficient funds') — same order as deposit(). src/accounts.js:43-47 (closeAccount) confirms the invariant: it throws 'empty the account first' unless balanceCents === 0, so any closed account has balance 0, meaning for any valid positive amountCents both withdraw() guard conditions are true simultaneously and only check order decides the message. I wrote a scratch test (openAccount -> closeAccount -> withdraw(1 cent)) and ran it with `node --test`: it threw 'a closed account cannot pay out', confirming today's behavior and ordering are correct, exactly as the claim states. I then grepped every test file (test/transfers.test.js, test/server.test.js, test/accounts.test.js, test/store.test.js) for any call sequence that opens-then-closes an account and then calls withdraw() or POST /withdrawals on it — there is none. The only withdraw-specific test added by this diff (test/transfers.test.js:71-79, 'a deposit raises the currency's total; a withdrawal lowers the balance and never overdraws') only exercises insufficient-funds (amountCents=51 against a 50-cent balance) and the success path; the new server.test.js withdrawal call (line 88) is against an open, funded account. So the described gap is real and exactly as stated: a future reorder of the two checks, or a future removal of the balance check paired with a break of closeAccount's zero-balance invariant, would change withdraw()'s behavior against a closed account and no test in the suite would catch it. One nuance worth noting for calibration: this is a pre-existing pattern rather than something unique to withdraw() — deposit()'s own closed-account 409 ('a closed account cannot take a deposit', transfers.js:57) is likewise never asserted by any test in the repository, so the gap for withdraw() is this diff extending an existing untested-message pattern rather than a novel lapse. That nuance affects how surprising the finding is, not whether it is true, so I am not marking it refuted — all of the claim's factual and mechanistic assertions check out, and I could not refute the coverage gap. Given the real-world impact is modest (a check-order swap only changes which 409 message fires, since the invariant holds; only a compounding second regression — dropping the balance check entirely — would allow an actual overdraw), I'd rate this LOW rather than MEDIUM severity, but the finding itself stands.",
+      "verifiedBy": [
+        "refute:1"
+      ]
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The PR's own docs/deploy.md states as an explicit, load-bearing invariant: 'Two copies can run against one file during a deploy.' Migration 003 adds a brand-new `totals` collection and bumps `version` to 3, but `Store` loads the whole file into memory once at process startup (src/server.js's `const store = await Store.open(file)`) and `save()` always serializes that entire in-memory snapshot (`JSON.stringify(this.data)`), never a partial/merged write (src/store.js). I verified with a standalone simulation (old pre-PR store.js vs. this PR's store.js against the same file) that if the pre-PR process is still running when the new release migrates and saves (adding `totals`, version 3), the OLD process's very next save -- triggered by something as ordinary as it handling one more deposit with code it already understood -- overwrites the file with its own stale in-memory data: `totals` disappears entirely (not merely stale, literally absent from the JSON) and `version` reverts to 2. Concretely: after the new process migrates, disk has `totals: [{id:'AUD',cents:500}], version:3`; after the old process's next unrelated save, disk has `totals: undefined, version: 2` and the old process's own stale balance silently replaces whatever the new process had written for that account. This is not the already-reported 'withdraw forgets to bump totals' bug -- it is the documented two-copy rollout window itself destroying the whole feature (and quietly reverting the schema version, which would cause migration 003 to simply re-run and rebuild totals from whatever balances happen to exist at that later moment, masking the loss).",
+      "why": "correctness and data-integrity review read transfers.js/migrations/003 as pure functions and checked their output against a single process's state; tests-that-dont-test and boundary-contract operate inside one Store instance in one test process, so they can never see a second stale Store instance clobbering disk; migrations-and-rollout, as run, evaluated migration 003 for being additive and matching existing balances at the moment it runs, not against docs/deploy.md's explicit 'two copies against one file' premise, which only bites when a second long-lived process's full-snapshot save happens after the first process's migration-triggered save -- a scenario no single-process test or code read would expose without actually running two Store instances against one file, which I did and confirmed produces exactly this data loss."
+    },
+    {
+      "what": "README.md's 'Users and roles' table (line 22) still reads admin may do 'everything a member may, plus deposits into any account' -- the PR updated the separate API route table (adding `/withdrawals` and `/summary` rows) but left this role-capability summary unchanged, so it now understates what an admin can do and documents a narrower contract than the code implements.",
+      "why": "Every run angle (correctness, tests-that-dont-test, migrations-and-rollout, boundary-contract, overdraft-vs-closed-account-ordering, silent-drops, data-integrity) reads code and tests, not prose-to-prose consistency inside a markdown file; a stale doc line produces no failing test and no runtime behavior to catch, so it falls outside every angle's evidence source."
+    }
+  ],
+  "counts": {
+    "raw": 13,
+    "rootCauses": 3,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 17,
+    "scout": 1,
+    "finders": 7,
+    "triage": 1,
+    "skeptics": 7,
+    "critic": 1,
+    "retries": 0
+  }
+}

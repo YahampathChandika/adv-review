@@ -1,0 +1,149 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "5d9e288679769335a688cda4db28d8b2a64b4675",
+  "angles": [
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "correctness",
+      "why": "The diff is four small hunks (a 7-line guard function, a 2-line server.js change, a README line, a test). Traced every edge (strict `=== undefined` check, `actingFor`'s lookup against a null/missing id, ordering of the 403-before-404 checks) and found no independent off-by-one/null-path/race defect. The one real logic defect found is an identity-substitution problem that belongs to authz-and-attribution, not a separate ordinary-logic bug."
+    },
+    {
+      "title": "boundary-contract",
+      "why": "`onBehalfOf` is a transient lookup key, never a persisted field: `SCHEMA.transfers` in src/store.js has no `onBehalfOf` key, so `store.insert`'s `pick()` would strip it even if someone tried to carry it through, and `transfer()`'s destructuring (`{ fromId, toId, amountCents, memo }`) already ignores it today. Grepped for other callers of `transfer(...)` and `actingFor(...)` — only the one route uses either, so there is no second consumer of the new field or function whose expectations could now disagree."
+    },
+    {
+      "title": "silent-drops",
+      "why": "No new field is written to a store/schema by this diff that is expected to be read back under a different name or dropped by a validator. The thing that actually goes wrong here is a value (the real actor's id) being substituted for a different, valid one rather than a write being silently discarded — that is an attribution failure, already covered under authz-and-attribution, not a dropped-field bug."
+    },
+    {
+      "title": "security",
+      "why": "No SQL/HTML/URL construction, no secret or token handling, no redirect, no CORS, no outbound/third-party call is touched by this diff. `actingFor` only reads from the existing in-memory store by id. The sole exposure this diff creates is an authorization/attribution question, already scoped under authz-and-attribution."
+    },
+    {
+      "title": "data-integrity",
+      "why": "`transfer()`'s balance mutation was already synchronous and atomic (two `store.update` calls plus an insert, no `await` in between) before this diff and is unchanged; `onBehalfOf` only changes which user's accounts those updates target, not the concurrency model. No cache, no retry path, no unbounded collection growth is introduced."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema file under src/migrations changed, no stored field added/removed/renamed, no deploy-order dependency introduced — this is a pure in-request behavior change."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds `onBehalfOf: <userId>` to POST /transfers: a new `actingFor(store, user, userId)` guard in src/auth.js requires the caller be an admin (else 403) and the named user to exist (else 404), then server.js calls `transfer(store, owner, body)` with `owner` being that looked-up member instead of the authenticated caller. The existing `transfer()` function is otherwise untouched, so ownership/balance/currency checks still run against the impersonated member's accounts as before.",
+  "confirmed": [
+    {
+      "title": "On-behalf-of transfer attributes the admin's action to the member",
+      "file": "src/server.js",
+      "line": 83,
+      "category": "authz-and-attribution",
+      "severity": "critical",
+      "rootCause": "The on-behalf-of transfer handler calls transfer(store, owner, body) with owner being the impersonated member, so transfers.js stamps actorId with the member's id and audit.record() logs the member's id too — the admin who actually authenticated and performed the action is never recorded anywhere.",
+      "summary": "When an admin transfers on a member's behalf, the stored transfer row's actorId and the audit-log entry both record the impersonated member's id, never the admin who actually authenticated and placed the call.",
+      "failure": "POST /transfers authenticated as an admin with onBehalfOf set to a member's id succeeds (201) and moves the member's money, but the stored transfers row's actorId and the corresponding audit.js entry's actorId both equal the member's id rather than the admin's, so there is no persisted record that an administrator performed or touched the transfer.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 83,
+          "title": "On-behalf-of transfer attributes the admin's action to the member"
+        }
+      ],
+      "foundBy": [
+        "authz-and-attribution"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js (lines 82-87), src/transfers.js (transfer() and record() calls), src/audit.js (its doc comment), and src/accounts.js (the existing ownerId/actorId split pattern). Reproduced live via a script hitting the HTTP server exactly as the claim describes: authenticated as admin (tok-ada), POST /transfers with onBehalfOf set to the member's id. The call succeeded (201), moved the member's own money correctly, but the persisted transfers row's actorId and the single audit entry for that transfer both equal the member's user id, never the admin's. Ran the full test suite (23/23 pass) and confirmed the new test in test/server.test.js only asserts status codes and final balance, never actorId or audit attribution, so nothing in the existing tests catches this. The code path is reachable exactly as described: body.onBehalfOf !== undefined routes through actingFor() (which requires admin role and a valid target user, matching the 403/404 behavior described) and then transfer(store, owner, body) binds the member as `user` for the entire function body, including the actorId stamp and the record() audit call. No alternate mechanism anywhere in auth.js, server.js, or audit.js separately tracks the authenticating caller once actingFor() substitutes the impersonated user. The claim's cited line numbers, mechanism, and live repro values all check out precisely.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "New onBehalfOf test never checks who gets attributed",
+      "file": "test/server.test.js",
+      "line": 79,
+      "category": "test-coverage",
+      "severity": "medium",
+      "rootCause": "The single new test for admin-on-behalf-of transfers only asserts HTTP status codes and the resulting account balance; it never inspects the stored transfer row's actorId or the audit log entry, so it would pass unchanged whether the write is (mis)attributed to the member or correctly attributed to the admin.",
+      "summary": "The only test added for admin-on-behalf-of transfers asserts HTTP status codes and final balance but never inspects the stored transfer's actorId or the audit log, so it passes identically whether the write is attributed to the admin or to the impersonated member.",
+      "failure": "test/server.test.js:79-94 calls POST /transfers with onBehalfOf as admin, asserts status 403/404/201 and then checks only `GET /accounts/:id`'s balanceCents (test/server.test.js:90). It never reads back the transfer row's actorId nor queries the audit log for who is recorded as the actor. Because of this, the attribution bug described above (actorId/audit entry set to the member instead of the acting admin) ships with this diff and the added test still goes green — the test would pass unchanged if `transfer()` recorded the admin, the member, or even a hardcoded constant, since none of those are asserted.",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "New onBehalfOf test never checks who gets attributed"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 89,
+          "title": "New on-behalf-of test never checks actorId/audit attribution"
+        }
+      ],
+      "foundBy": [
+        "authz-and-attribution",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js: transfer(store, user, ...) sets row.actorId = user.id and calls record(store, user.id, 'transfer', row.id). In src/server.js the POST /transfers handler computes owner = actingFor(...) when onBehalfOf is present and calls transfer(store, owner, body) — so inside transfer(), 'user' is the impersonated member, not the admin. I ran the new test's exact scenario via a script against the real store and confirmed both the transfer row's actorId and the audit entry's actorId equal the member's id, not the admin's. I then read the new test (test/server.test.js, the 'an administrator transfers on a member's behalf' test, declared at line 79) in full: it destructures store from freshStore() (so the data is reachable) but only ever asserts HTTP status codes (403, 404, 201) and the final GET /accounts/:id balanceCents (line 90). It never reads store.all('transfers') or store.all('audit'). Since nothing in the test touches actorId or the audit log, the test would pass unchanged if the implementation attributed the write to the admin, the member, or a hardcoded value — exactly as claimed. The minor line-number discrepancy (claim cites 89 vs actual 90 for the balance assertion) is immaterial; both cited sites point into the same test and the substance of the claim is accurate.",
+      "verifiedBy": [
+        "refute:1"
+      ]
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The identity substitution at src/server.js:83 doesn't just mislabel the `transfers` row (the reported finding) — it corrupts the separate, append-only `audit` collection too. `transfer()` (src/transfers.js:34 and :37) writes `actorId: user.id` and calls `record(store, user.id, 'transfer', row.id)` using whatever `user` it's handed; since server.js now hands it the substituted member instead of the real admin caller, every on-behalf-of transfer logs the member as having made it. src/audit.js's own doc comment defines this field as 'the signed-in user for a request... never a person who did not do it,' and README.md:47-48 documents the identical guarantee repo-wide ('Every write is audited under the user who made it... never a person who did not act'). Because saves just serialize the array (no edit/delete path), this is an irreversible corruption of the forensic/compliance trail: if a member later disputes a phone-authorized transfer, the audit log points back at the member, not the admin who acted. test/transfers.test.js — a file this PR never touches — already pins this exact invariant for ordinary transfers and deposits via `entriesFor(...).map(e => [e.actorId, e.action])`, so this is a silent regression against an existing, tested contract in a subsystem none of the six ruled-out angles name and the one-line authz-and-attribution finding doesn't call out.",
+      "why": "Every ruled-out angle reasoned only about the `transfers` collection's schema/fields (boundary-contract), request/response security (security), or concurrency (data-integrity) — none inspected src/audit.js, its docstring guarantee, or README's 'Rules' section, and none noticed that a pre-existing test file already encodes the exact invariant this PR breaks. The active authz-and-attribution finding is scoped to the single substitution line and its effect on the transfer row, not to the separate append-only audit subsystem or the fact that it's an irreversible, previously-tested regression."
+    },
+    {
+      "what": "src/auth.js:37-43's `actingFor` checks only that the caller is an admin (`user.role !== 'admin'`) and that the target id resolves to some user (`store.get('users', userId)`); it never checks `other.role === 'member'`. The PR's title ('Administrators transfer on a member's behalf'), its description ('move money between a member's own accounts'), and its own README addition ('move money between that member's accounts') all frame the feature as acting for a member specifically — but the code equally accepts another admin's id, letting Admin A silently substitute Admin B as the transfer owner and move money between Admin B's own accounts, with no requirement that Admin B requested or consented to it. Combined with the attribution gap above, Admin B's own account history would then show the transfer as if Admin B made it. No test, new or pre-existing, exercises onBehalfOf against an admin target, so this scope mismatch between the stated intent and the implementation is wholly unexercised.",
+      "why": "Correctness and boundary-contract both reasoned about `onBehalfOf` purely as a lookup key / storage question (null id, missing id, schema stripping), not about which roles are legitimate targets. Authz-and-attribution's reported finding is about whose name the completed transfer gets attributed to, not about who is eligible to be acted for in the first place — a business-rule scope the PR's own description promises ('a member's accounts') that the code does not enforce."
+    }
+  ],
+  "counts": {
+    "raw": 3,
+    "rootCauses": 2,
+    "confirmed": 2,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 9,
+    "scout": 1,
+    "finders": 2,
+    "triage": 1,
+    "skeptics": 4,
+    "critic": 1,
+    "retries": 0
+  }
+}

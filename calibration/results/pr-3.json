@@ -1,0 +1,154 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "ec38b7f4818c2cd7a7aee111ab72a7bfe1d786e7",
+  "angles": [
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "doc-drift / stated-intent-vs-code",
+      "source": "scout"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "silent-drops",
+      "why": "The diff only renames/reshapes function arguments; it writes no new or renamed field to the store. SCHEMA (store.js) is untouched and every value openAccount persists (ownerId, label, currency, balanceCents, closedAt, createdAt, updatedAt) and audits (actorId, action, target) uses the same key names before and after. No new boundary (API field, queue message, config key) is introduced."
+    },
+    {
+      "title": "security",
+      "why": "No new injection surface, secret handling, redirect, CORS policy or third-party data flow is touched - the diff is a call-shape refactor of one internal function plus one route's argument selection; nothing here parses untrusted strings into a query/HTML/URL context or talks to an external service."
+    },
+    {
+      "title": "data-integrity",
+      "why": "store.insert/update, save() ordering and the single-writer in-memory-then-atomic-rename model are all untouched; openAccount still does one insert and one audit insert in the same synchronous call, same as before. No concurrency, cache-invalidation, retry or growth/eviction logic is in this diff."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file, schema change, or field rename/removal is in this diff, and this is a single process with no independent old-code/new-code deploy boundary for this change - the whole repo deploys atomically. src/migrations/ is untouched."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "openAccount's signature changes from a single options bag {ownerId, label, currency, actorId} to (store, actor, {label, currency, ownerId = actor.id}), so the acting user is a dedicated positional argument instead of two fields threaded through options. src/server.js and the two test files that call openAccount were updated to the new call shape, and the behaviour for the one updated caller (POST /accounts) is unchanged.",
+  "confirmed": [
+    {
+      "title": "seed.mjs still uses old openAccount signature, crashes",
+      "file": "scripts/seed.mjs",
+      "line": 26,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "scripts/seed.mjs still calls openAccount with the old options-object shape (store, { ownerId, label, actorId }) instead of the new (store, actor, { label, currency, ownerId }), so `actor` is undefined inside the function and destructuring the missing third argument throws \u2014 confirmed by actually running `node scripts/seed.mjs`, which crashes with 'Cannot destructure property label of undefined' at src/accounts.js:9 / scripts/seed.mjs:26.",
+      "summary": "scripts/seed.mjs, the README-documented bootstrap command, still calls openAccount with the pre-refactor options-object shape (store, { ownerId, label, actorId }), which no longer matches the new (store, actor, options) signature, so it crashes on every fresh ledger.",
+      "failure": "Running `node scripts/seed.mjs` (README.md:9's documented way to bootstrap a new ledger) against a fresh/empty ledger file throws an unhandled TypeError and exits 1 before any data is saved: `TypeError: Cannot destructure property 'label' of 'undefined' as it is undefined` at src/accounts.js:9, from scripts/seed.mjs:26. Verified by running `LEDGER_FILE=/tmp/seed-test-ledger.json node scripts/seed.mjs` in the worktree at the PR's head commit \u2014 it crashes with exit code 1 and never reaches store.save(), so no admin/member/account/tokens are produced and the admin/member tokens the README promises are never printed. The second call at scripts/seed.mjs:27 has the identical bug. The full test suite (22/22) passes because every test file was updated to the new call shape, giving false confidence that this is a 'pure refactor with no behaviour change' while the actual documented bootstrap entry point is completely broken.",
+      "sites": [
+        {
+          "file": "scripts/seed.mjs",
+          "line": 26,
+          "title": "seed.mjs still uses old openAccount signature, crashes"
+        },
+        {
+          "file": "scripts/seed.mjs",
+          "line": 26,
+          "title": "seed.mjs still uses pre-refactor openAccount shape, crashes"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract",
+        "doc-drift / stated-intent-vs-code"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read scripts/seed.mjs in the PR-head worktree: lines 26-27 call `openAccount(store, { ownerId: member.id, label: 'Everyday', actorId: member.id })` and `openAccount(store, { ownerId: member.id, label: 'Savings', actorId: member.id })` \u2014 the old options-object shape, untouched by this diff (the diff only touches src/accounts.js, src/server.js, test/accounts.test.js, test/transfers.test.js). The new signature from the diff is `openAccount(store, actor, { label, currency = 'AUD', ownerId = actor.id })`, so when seed.mjs's second positional argument (the options object) lands in `actor`, the destructuring `{ label, currency = 'AUD', ownerId = actor.id }` of the real third argument (`undefined`, since seed.mjs passes only two arguments) throws. I reproduced this directly: `LEDGER_FILE=/tmp/seed-test-ledger-verify.json node scripts/seed.mjs` on the PR-head commit threw `TypeError: Cannot destructure property 'label' of 'undefined' as it is undefined` at src/accounts.js:9 from scripts/seed.mjs:26, exit code 1, and the resulting ledger file had empty users/accounts/audit arrays (store.save() was never reached, matching the claim that no admin/member/account/tokens are produced). I then checked out the pre-PR parent commit (89da56f) and ran the identical command: it succeeded (exit 0), printed the admin and member tokens, and seeded the file \u2014 confirming the breakage is newly introduced by this diff, not pre-existing. I also ran `npm test` on the PR-head commit: all 22 tests pass, confirming the claim's point that the test suite gives false confidence despite the documented bootstrap entry point (README.md lines 7-9 document `node scripts/seed.mjs` as the way to seed an admin/member/two accounts) being completely broken. Both cited call sites (seed.mjs:26 and :27) use the identical stale shape and would both throw (the first one throws before the second is ever reached). Nothing in Node's runtime, a guard, or a test prevents this \u2014 scripts/seed.mjs is a standalone script never exercised by `npm test`, so no caller or test catches the mismatch.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "No test ever has ownerId differ from actor",
+      "file": "test/accounts.test.js",
+      "line": 9,
+      "category": "test-coverage",
+      "severity": "medium",
+      "rootCause": "Every openAccount call across the test suite (and seed.mjs, and server.js) passes no explicit ownerId, so the PR's one new behavior \u2014 ownerId defaulting to actor.id but being overridable \u2014 is never exercised with owner != actor, leaving that code path and the actor-vs-owner audit distinction completely unverified; confirmed by grep showing zero call sites anywhere in test/ pass an explicit ownerId option.",
+      "summary": "Every call to openAccount across the whole test suite (unit and HTTP) passes an owner identical to the actor, so the new `ownerId = actor.id` override \u2014 the one piece of behavior this refactor adds, per its own docstring (\"Open an account for `ownerId` (the actor's own, by default)\") \u2014 is never exercised, and neither is the actor-vs-owner distinction in the audit write.",
+      "failure": "Verified empirically: in src/accounts.js:23, changing `record(store, actor.id, 'account.open', account.id)` to `record(store, ownerId, 'account.open', account.id)` (crediting the account's owner instead of the person who actually opened it) still passes all 11 tests in test/accounts.test.js and test/transfers.test.js unmodified, because every call site (grepped across test/accounts.test.js, test/transfers.test.js, and the HTTP tests in test/server.test.js) always has ownerId equal to actor.id. If a future caller ever exercises the override (e.g. an admin-opens-account-for-member endpoint) and the audit record is accidentally attributed to the owner rather than the actor, no test would catch it \u2014 the audit trail would then falsely say the member opened their own account when really an admin did, which is exactly the 'who did what' fact this ledger's audit log exists to get right.",
+      "sites": [
+        {
+          "file": "test/accounts.test.js",
+          "line": 9,
+          "title": "No test ever has ownerId differ from actor"
+        },
+        {
+          "file": "src/accounts.js",
+          "line": 9,
+          "title": "ownerId override path has no test coverage"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Checked out the PR commit and grepped every call site of openAccount across test/accounts.test.js, test/transfers.test.js, test/server.test.js (HTTP), scripts/seed.mjs, and src/server.js: none pass an explicit ownerId differing from the actor. Ran the baseline suite (22/22 pass), then applied the exact mutation the claim describes in src/accounts.js (record(store, actor.id, ...) -> record(store, ownerId, ...)), which silently changes who the audit entry blames, and reran: all 22 tests, including the single audit-attribution assertion in test/accounts.test.js (which checks entriesFor(...).map(e => [e.actorId, e.action])), still pass unchanged because every exercised case has ownerId === actor.id. The ownerId-defaults-to-actor/override mechanism is new in this diff (previously both ownerId and actorId were required, unrelated params always passed equal by every caller), so the override path genuinely has zero test coverage as a direct result of this change. Both cited line numbers (test/accounts.test.js:9, src/accounts.js:9) check out. Working tree restored clean afterward.",
+      "verifiedBy": [
+        "refute:1"
+      ]
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "POST /accounts now crashes with a 500 instead of a clean 400 when the JSON request body is the literal `null`. The old handler built options as `{ ...body, ownerId: user.id, actorId: user.id }` \u2014 spreading `null` is a no-op in JS, so `label` ended up `undefined` and `openAccount` threw its normal `HttpError(400, 'label is required')`. The new handler in src/server.js does `openAccount(store, user, { label: body.label, currency: body.currency })`, reading `.label` directly off `body`; when `body` is `null` this throws an uncaught `TypeError: Cannot read properties of null (reading 'label')`, caught only by the server's generic try/catch and turned into a 500 `{\"error\":\"internal error\"}`, plus a `console.error('request failed', ...)` stack-trace log. I reproduced this live against the PR's code: POSTing body text `null` with a valid bearer token to /accounts returns status 500 with exactly that TypeError, confirming the regression. This directly contradicts the PR's own stated intent ('pure refactor with no behaviour change') and sits squarely in the HTTP boundary-contract layer that one of the five angles that actually ran was supposed to cover, yet the only two findings reported (seed.mjs's stale call shape, and the ownerId-never-differs-from-actor test gap) are both unrelated to this \u2014 this is a distinct, newly-introduced input-handling regression caused by swapping a null-safe object spread for direct property access.",
+      "why": "The four angles the scout ruled out (silent-drops, security, data-integrity, migrations-and-rollout) are correctly scoped away since this isn't a schema/injection/store/migration issue. Boundary-contract and correctness did run as angles, but their actual reported output only covered the internal call-signature boundary (seed.mjs) and a test-coverage hole (ownerId vs actor) \u2014 neither touched the external HTTP body-shape contract of the POST /accounts route itself. Finding it requires actually exercising the live route with a non-object JSON body; `null` is the one JSON scalar that throws on property access (numbers, strings, booleans, and arrays all auto-box and silently return `undefined` for `.label`), so it's an edge case a diff-only or signature-level read would not surface \u2014 only running the route against that specific payload reveals it, which is exactly what I did."
+    }
+  ],
+  "counts": {
+    "raw": 4,
+    "rootCauses": 2,
+    "confirmed": 2,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 12,
+    "scout": 1,
+    "finders": 5,
+    "triage": 1,
+    "skeptics": 4,
+    "critic": 1,
+    "retries": 0
+  }
+}

@@ -197,8 +197,13 @@ a small ledger service whose pull requests each carry one planted defect the PR'
 tests miss (two carry none). The answer key and the scorer are in [`calibration/`](calibration/):
 run each PR with `--out`, then `node calibration/score.mjs` reports which planted
 defects were confirmed, found and then wrongly refuted, or missed, what was reported
-that nobody planted, and recall and precision over the set. The numbers from the
-first pass will be recorded there with the release that ran them.
+that nobody planted, and recall and precision over the set.
+
+The first pass, for 0.2.0 with Sonnet agents: all ten planted defects confirmed and
+none wrongly refuted; 20 of 25 confirmed findings true after a person adjudicated the
+unplanted ones, the five false being coverage notes on correct code; three findings on
+the two clean PRs, all false; 7 to 20 agents and 13 to 28 minutes per PR. The result
+files and every adjudication are in [`calibration/`](calibration/README.md#results).
 
 ## Tests
 

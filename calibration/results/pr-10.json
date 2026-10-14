@@ -1,0 +1,138 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "6040444b2e7da9774a98c28c7c8d15d73b175150",
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "silent-drops",
+      "why": "This diff adds no new write path at all \u2014 publicAuditEntry and the new route only read the pre-existing 'audit' collection that record() already writes (account.open/account.close/deposit/transfer), and that write path is unchanged and already covered by prior tests. There is no new field, rename, or schema key for a value to be silently dropped on the way in or out."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file is touched and the 'audit' collection's SCHEMA entry (id/actorId/action/target/at) is unchanged from before this PR; nothing about deploy order, old-code/new-data compatibility, or rollback is affected."
+    },
+    {
+      "title": "security",
+      "why": "params[0] is used only as a store lookup key (no SQL/HTML/URL construction), nothing secret or token-like is added or logged, and there are no redirects, SSRF, CORS, or third-party calls in this diff. The one authorization-shaped question this route raises (can a caller see data they don't own) is exactly what the kept authz-and-attribution angle covers, so keeping both would duplicate the same check."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds GET /accounts/:id/audit: an owner-only route that unions the account's own id with the ids of its current transfers, filters the whole in-memory 'audit' collection against that target set, and maps each hit through a new publicAuditEntry({action, at}) serializer (actor deliberately omitted). It introduces no new write path, schema change, or migration \u2014 it only reads what accounts.js/transfers.js already write via audit.js's record().",
+  "confirmed": [
+    {
+      "title": "Audit test's single transfer never exercises recipient-side or cross-account scoping",
+      "file": "test/server.test.js",
+      "line": 79,
+      "category": "test-coverage",
+      "severity": "medium",
+      "rootCause": "The new audit-trail integration test only ever creates one transfer with the queried account as fromId, so it cannot distinguish correct bidirectional/cross-account scoping of audit entries from several incorrect implementations that would pass the same fixture.",
+      "summary": "The new audit-trail test creates exactly one transfer total, with the queried account always on the fromId side, so it cannot distinguish a correctly-scoped, bidirectional union of 'this account's transfer ids' from several badly wrong implementations that happen to produce the same three-action sequence on this one fixture.",
+      "failure": "Mutating the route's `own` transfer-id computation to (a) fromId-only, or (b) every transfer system-wide with no account scoping, both still pass test/server.test.js in full, because the single fixture transfer has the queried account on the fromId side and the store holds only that one transfer total.",
+      "sites": [
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "Audit test's single transfer never exercises recipient-side or cross-account scoping"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Reproduced both mutations described by the finder directly in the worktree against src/server.js's new /accounts/:id/audit route, running the full test/server.test.js each time, then reverting cleanly (git status confirmed clean). (1) Replacing `transfersFor(store, account.id).map((t) => t.id)` with `store.all('transfers').filter((t) => t.fromId === account.id).map((t) => t.id)` (dropping the toId side of the union) \u2014 all 5 tests in the file still passed. (2) Replacing it with `store.all('transfers').map((t) => t.id)` (no account scoping at all, every transfer in the store) \u2014 all 5 tests still passed. Both pass because the test's fixture (test/server.test.js:79-95) creates exactly one transfer in the whole store, with the queried account `a` always as fromId, so fromId-only scoping and zero scoping are indistinguishable from correct bidirectional per-account scoping on this fixture. The claim's mechanism and failure are exactly as described.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    },
+    {
+      "title": "Audit route scans the entire global collection, unpaginated",
+      "file": "src/server.js",
+      "line": 87,
+      "category": "unbounded-growth",
+      "severity": "low",
+      "rootCause": "GET /accounts/:id/audit implements per-account scoping by filtering the entire system-wide audit collection on every request with no pagination/limit/cursor, so cost and response size scale with total system activity rather than the requested account's own history.",
+      "summary": "GET /accounts/:id/audit scans the entire system-wide `audit` collection on every call (no index, no pagination), so per-request CPU cost grows with total system-wide audit volume rather than the queried account's own history \u2014 confirmed by direct benchmarking. The response payload itself, however, stays correctly bounded to the account's own matching entries (the scoping filter is correct), so it is inaccurate to say response size scales with total system activity. The lack of pagination also mirrors the pre-existing, unpaginated GET /accounts/:id/transfers route, not a deviation unique to this PR.",
+      "failure": "I measured this directly against the real Store/record code used by the route (src/store.js, src/audit.js): with account \"a\" holding only 3 of its own audit events, growing the GLOBAL audit collection with unrelated events for other accounts/users (ordinary system-wide activity, none touching account \"a\") made the handler's own filter take 0.006ms at 3 rows, 2.5ms at 50k rows, 6ms at 150k, 14.4ms at 350k, and 26.8ms at 750k rows \u2014 linear in total system-wide volume, not in account \"a\"'s activity. Because this scan runs synchronously inside the request handler with no await, it also blocks Node's single event loop for that whole duration, so one account's audit query stalls every other concurrent request (deposits, transfers, other users' reads) on the server while it runs. As the ledger accumulates ordinary history from all users this keeps getting slower and the response keeps getting larger with no cap, unlike GET /accounts (PAGE_SIZE=20).",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 87,
+          "title": "Audit route scans the entire global collection, unpaginated"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Confirmed the core mechanism: src/server.js's audit route calls store.all('audit') (which returns the live in-memory array, not a copy \u2014 see src/store.js:69-72) and then .filter() over it, touching every audit row in the entire system on every request before narrowing to the account's own targets; there is no pagination, limit, or cursor. My own quick benchmark (node -e, arrays from 3 to 750,000 rows) confirmed filter cost grows with total collection size rather than with the number of matches, consistent with the finder's own measurements (my absolute numbers were smaller \u2014 ms-scale even at 750k rows \u2014 but the scaling shape matches). However, the claim overstates the consequence: response SIZE does not scale with total system activity \u2014 .filter() returns only rows whose target is in `targets`, so the JSON payload stays bounded to the queried account's own matching audit/transfer entries, not the whole system's volume. Only per-request CPU time scales with total system-wide volume. The claim also contrasts this with the paginated GET /accounts, but the more directly analogous existing route, GET /accounts/:id/transfers (src/server.js, pre-existing), already has the identical pattern \u2014 an unpaginated, unbounded result from `store.all('transfers').filter(...)` scanning the entire system-wide transfers collection on every call \u2014 so the lack of pagination here is consistent with an established (if debatable) convention in this codebase, not a uniquely worse choice invented by this PR.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true,
+      "severityFrom": "medium"
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/server.js:86-89 \u2014 the new route's \"oldest first\" contract is delivered only by incidental array-insertion order (store.all('audit').filter(...).map(...), no .sort()), unlike every sibling function that orders merged data in this codebase: listAccounts (src/accounts.js:32) and transfersFor (src/transfers.js:60) both sort explicitly by createdAt. The ordering here is correct today only because record() in accounts.js/transfers.js is always called synchronously, with no await between the store mutation and the audit insert, and the route handler itself has no await before scanning \u2014 none of which this diff documents or tests. It would silently produce the wrong order (no error, no test failure) the moment any future write path puts an async step before record(), or an audit row is ever produced out of band (a backfill/import script, a future migration). This spans three files the diff never touches (accounts.js, transfers.js, audit.js), so it is only visible by reading the write paths behind the changed route, not the route itself.",
+      "why": "It isn't a defect in the code as it stands today \u2014 I traced every record() call site and confirmed none has an intervening await, and verified behavior by running the server with a probe script, so correctness, boundary-contract, and tests-that-dont-test would each find present-day behavior matching the documented contract and move on. It isn't a value being dropped (ruling out silent-drops/data-integrity), not a schema or deploy-order concern (ruling out migrations-and-rollout), not an injection/SSRF/logging concern (ruling out security), and not about who can call the route (ruling out authz-and-attribution). It is an un-enforced invariant about the relationship between three unrelated write paths and this read path \u2014 a category none of the five angles' rubrics target, which is why it surfaced only from reading accounts.js and transfers.js alongside the diff rather than from the diff's own changed lines."
+    }
+  ],
+  "counts": {
+    "raw": 2,
+    "rootCauses": 2,
+    "confirmed": 2,
+    "plausible": 0,
+    "corrected": 2,
+    "downgraded": 1,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 9,
+    "scout": 1,
+    "finders": 5,
+    "triage": 1,
+    "skeptics": 1,
+    "critic": 1,
+    "retries": 0
+  }
+}

@@ -83,6 +83,65 @@ The caveat that matters: the fixture's name says what it is. An agent that reads
 README learns the repository exists to be reviewed, which may make it look harder than
 it would at a PR of yours. The answer key is not reachable from any branch.
 
+## Results
+
+### 0.2.0 — 14 October 2026, Sonnet agents
+
+One review per PR from a fresh clone, no `--agents` (the computed ceiling, 20), Sonnet
+as the agents' model and Opus orchestrating. The result files are in `results/`;
+`node calibration/score.mjs` reproduces every number below from them and the manifest.
+
+| | |
+| :- | :- |
+| Planted defects confirmed | **10 of 10**; none wrongly refuted, none missed |
+| By angle | every generic angle caught the defect planted for it; authz-and-attribution and security caught two each |
+| Confirmed findings true | **20 of 25**: 11 on planted defects, 9 adjudicated true, 5 adjudicated false |
+| On the two clean PRs | 3 confirmed findings, all false |
+| Agents | 152 over 11 PRs; 7 to 20 per PR, mean 13.8 of the ceiling of 20; no retries, no agent lost, nothing left unverified |
+| Time to result | 13 to 28 minutes per PR, mean 21 |
+| Cost | about 65 dollars at list price for the pass, by the sessions' own estimates |
+
+| PR | planted | angles run | dropped | agents | minutes | raw | root causes | upheld | refuted |
+| :- | :- | -: | -: | -: | -: | -: | -: | -: | -: |
+| #1 | D1 | 3 | 5 | 12 | 28 | 5 | 2 | 2 | 0 |
+| #2 | D2 | 8 | 2 | 20 | 17 | 17 | 3 | 3 | 0 |
+| #3 | D3 | 5 | 4 | 12 | 16 | 4 | 2 | 2 | 0 |
+| #4 | D4 | 6 | 2 | 18 | 22 | 12 | 3 | 3 | 0 |
+| #5 | D5 | 7 | 3 | 16 | 22 | 12 | 2 | 2 | 0 |
+| #6 | D6 | 2 | 6 | 9 | 13 | 3 | 2 | 2 | 0 |
+| #7 | D7, D8 | 8 | 2 | 18 | 16 | 14 | 3 | 3 | 0 |
+| #8 | D9 | 7 | 2 | 17 | 23 | 13 | 3 | 3 | 0 |
+| #9 | D10 | 5 | 3 | 14 | 25 | 4 | 2 | 2 | 0 |
+| #10 | clean | 5 | 3 | 9 | 24 | 2 | 2 | 2 | 0 |
+| #11 | clean | 3 | 5 | 7 | 23 | 2 | 2 | 1 | 1 |
+
+*Angles run* counts the generic angles the scout kept plus the ones it added for the
+PR; *dropped* is what it ruled out with a reason. *Raw* is findings before triage.
+
+**The five false positives.** Every one is a coverage note on code the review itself
+found correct, or a design remark; none claims a failure the code does not have:
+on #3 that no test has the owner differ from the actor; on #8 that the closed-account
+refusal in `withdraw` is untested; on #10 that the audit test uses one transfer, and
+that the audit route scans the whole collection as every sibling route does; on #11
+that the currency test uses one currency for both accounts, which a transfer requires.
+The reasoning for each is in `manifest.json` under `adjudicated`.
+
+**The nine true, unplanted findings.** Seven are the PR's own test being blind to the
+planted defect, reported beside it as its own root cause: true, useful, and only
+countable once a person rules. One is a real defect introduced by accident, the
+renamed parameter in #9 breaking the seed script, the same class planted in #3. One
+is a 500 on a literal `null` body at the new destructuring in #7. One is #2's
+control-character regex missing C1 and the Unicode line separators.
+
+**Severity.** The review rates a test gap as high or critical when the defect it hides
+is; on its own a test gap is lower. Read a finding's severity as the severity of what
+it points at.
+
+**Caveats.** Sonnet agents, where users get Opus by default, so treat this as a floor.
+One small, dependency-free service, generic angles only, each PR reviewed once, so no
+variance measured. The fixture's name says what it is. The adjudications are the
+author's, recorded with their reasons for anyone to dispute.
+
 ## Adding a defect
 
 In the fixture: branch from `main`, add a feature in the ordinary way, let the defect
