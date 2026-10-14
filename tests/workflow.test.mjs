@@ -538,7 +538,7 @@ test('the head commit is required, and every agent is told to move to it first',
   // The first live run found it: each agent's worktree starts on MAIN, and those
   // agents were reviewing main while the PR's files did not exist there.
   for (const headSha of [undefined, '', 'abc12', 'not-a-sha', 42]) {
-    await assert.rejects(run(base({ headSha })), /"headSha" must be the pull request's head commit/, String(headSha))
+    await assert.rejects(run(base({ headSha })), /"headSha" must be the head commit under review/, String(headSha))
   }
   const { calls } = await run(base({ agents: 8 }), {
     ...scoutKeeping('correctness'),
@@ -838,4 +838,184 @@ test('finders, triage and skeptics are each told the blind-test rule', async () 
   assert.ok(of('find:tests-that-dont-test').every((p) => p.includes('A blind test is evidence, not a finding')))
   assert.ok(of('triage').length === 1 && of('triage')[0].includes('the blind\n  test is a site of the defect, not a root cause of its own'))
   assert.ok(of('refute').length > 0 && of('refute').every((p) => p.includes('while\n  the implementation in your worktree is right, has no failure: refuted')))
+})
+
+// --- 0.4.0: the same-site check -------------------------------------------------
+
+/** The group ids a same-site prompt lists, in order: lines like "  G2  CRITICAL — …". */
+const groupsIn = (prompt) => [...prompt.matchAll(/^ {2}(G\d+) {2}/gm)].map((m) => m[1])
+/** A triage that leaves every finding in a group of its own. */
+const triageApart = { triage: (p) => ({ clusters: idsIn(p).map((id) => ({ ids: [id], rootCause: `root cause of ${id}` })) }) }
+const atExport = (over = {}) => finding({ file: 'src/export.js', line: 18, ...over })
+
+test('two groups at one place that are one defect are merged: one finding, both sites, the more severe lead', async () => {
+  // The 0.3.0 calibration: a path traversal came back twice, once under security
+  // and once re-described under data-integrity, because triage kept them apart.
+  let prompt = ''
+  const { result, count, logs, calls } = await run(base({ agents: 20 }), {
+    ...findersReturning({
+      correctness: [finding({ file: 'src/other.ts', line: 5, title: 'Unrelated' })],
+      security: [atExport({ title: 'Path traversal', severity: 'critical', category: 'security' })],
+      'data-integrity': [atExport({ title: 'No containment', severity: 'medium', category: 'data-integrity' })],
+    }),
+    ...triageApart,
+    'same-site': (p) => {
+      prompt = p
+      // The less severe group named first: the merged group must still be led by
+      // its most severe member.
+      return { merges: [{ ids: groupsIn(p).reverse(), reason: 'the same unchecked join', rootCause: 'the export name is joined into the path unchecked' }] }
+    },
+  })
+  assert.equal(count('same-site'), 1)
+  assert.equal(groupsIn(prompt).length, 2, 'only the groups at one place are asked about')
+  assert.ok(!prompt.includes('src/other.ts'))
+  assert.equal(result.counts.rootCauses, 2)
+  assert.equal(result.confirmed.length, 2)
+  const merged = result.confirmed.find((f) => f.file === 'src/export.js')
+  assert.equal(merged.title, 'Path traversal')
+  assert.equal(merged.severity, 'critical')
+  assert.equal(merged.rootCause, 'the export name is joined into the path unchecked')
+  assert.deepEqual([...merged.foundBy].sort(), ['data-integrity', 'security'])
+  assert.equal(merged.sites.length, 2)
+  assert.equal(result.budget.sameSite, 1)
+  assert.equal(result.budget.used, calls.length, 'the check is an agent spent')
+  assert.equal(result.counts.merged, 1)
+  assert.ok(logs.some((l) => l.startsWith('same-site check:')))
+})
+
+test('distinct defects at one place stay apart', async () => {
+  const { result, count } = await run(base({ agents: 20 }), {
+    ...findersReturning({
+      security: [atExport({ title: 'Path traversal', severity: 'critical' })],
+      'data-integrity': [atExport({ title: 'Owners overwrite each other', severity: 'high' })],
+    }),
+    ...triageApart,
+    'same-site': () => ({ merges: [] }),
+  })
+  assert.equal(count('same-site'), 1)
+  assert.equal(result.counts.rootCauses, 2)
+  assert.equal(result.confirmed.length, 2)
+})
+
+test('the check can only merge groups that share a place', async () => {
+  // Groups, in triage order: G1 src/other.ts, G2 src/elsewhere.ts (neither shown to
+  // the agent), G3 and G4 at src/export.js:18, G5 and G6 at src/auth.js:25.
+  const merging = (...ids) =>
+    run(base({ agents: 30 }), {
+      ...findersReturning({
+        correctness: [finding({ file: 'src/other.ts', line: 5 }), finding({ file: 'src/elsewhere.ts', line: 9 })],
+        security: [atExport({ title: 'Traversal' }), atExport({ title: 'Overwrite' })],
+        'authz-and-attribution': [finding({ file: 'src/auth.js', line: 25 }), finding({ file: 'src/auth.js', line: 26 })],
+      }),
+      ...triageApart,
+      'same-site': () => ({ merges: [{ ids, reason: 'invented' }] }),
+    }).then((r) => r.result.counts.rootCauses)
+  assert.equal(await merging('G3', 'G4'), 5, 'a pair at one place merges')
+  assert.equal(await merging('G1', 'G3'), 6, 'a group it was not shown cannot join one it was')
+  assert.equal(await merging('G1', 'G2'), 6, 'two groups it was not shown cannot merge')
+  assert.equal(await merging('G3', 'G5'), 6, 'groups at two different places cannot merge')
+})
+
+test('a group named in two merges counts once, and no finding is lost', async () => {
+  const { result } = await run(base({ agents: 20 }), {
+    ...findersReturning({ security: [atExport({ title: 'A' }), atExport({ title: 'B' }), atExport({ title: 'C' })] }),
+    ...triageApart,
+    'same-site': () => ({ merges: [{ ids: ['G1', 'G2'], reason: 'same' }, { ids: ['G2', 'G3'], reason: 'same again' }] }),
+  })
+  assert.equal(result.counts.rootCauses, 2)
+  assert.equal(result.confirmed.flatMap((f) => f.sites).length, 3)
+})
+
+test('a failed triage is not followed by the check', async () => {
+  const { count, result } = await run(base({ agents: 20 }), {
+    ...findersReturning({ security: [atExport({ title: 'A' })], 'data-integrity': [atExport({ title: 'B' })] }),
+    triage: () => new Error('died'),
+    'same-site': () => ({ merges: [] }),
+  })
+  assert.equal(count('same-site'), 0)
+  assert.equal(result.counts.rootCauses, 2)
+})
+
+test('a dead same-site check leaves the groups as triage made them, and says so', async () => {
+  const { result, count, logs } = await run(base({ agents: 20 }), {
+    ...findersReturning({ security: [atExport({ title: 'A' })], 'data-integrity': [atExport({ title: 'B' })] }),
+    ...triageApart,
+    'same-site': () => new Error('died'),
+  })
+  assert.equal(count('same-site'), 2, 'retried once')
+  assert.ok(result.retried.includes('same-site'))
+  assert.equal(result.counts.rootCauses, 2)
+  assert.ok(logs.some((l) => l.includes('same-site check FAILED')))
+  assert.equal(result.status, 'complete', 'a dead check costs the merge, never coverage')
+})
+
+test('the check runs only for separate groups within three lines of each other in one file', async () => {
+  const checks = async (a, b, responder = triageApart) =>
+    (
+      await run(base({ agents: 20 }), {
+        ...findersReturning({ security: [a], 'data-integrity': [b] }),
+        ...responder,
+        'same-site': () => ({ merges: [] }),
+      })
+    ).count('same-site')
+  assert.equal(await checks(atExport({ line: 18 }), atExport({ line: 21 })), 1)
+  assert.equal(await checks(atExport({ line: 18 }), atExport({ line: 22 })), 0)
+  assert.equal(await checks(atExport(), finding({ file: 'src/b.js', line: 18 })), 0)
+  // Already one group: nothing to rule on.
+  const together = { triage: (p) => ({ clusters: [{ ids: idsIn(p), rootCause: 'one' }] }) }
+  assert.equal(await checks(atExport(), atExport(), together), 0)
+})
+
+test('with no room under the ceiling the check is skipped, and the skip is logged', async () => {
+  const { calls, count, logs } = await run(base({ agents: 5 }), {
+    ...scoutKeeping('security'),
+    ...findersReturning({ security: [atExport({ title: 'A' }), atExport({ title: 'B' })] }),
+    ...triageApart,
+    'same-site': () => ({ merges: [] }),
+  })
+  assert.equal(count('same-site'), 0)
+  assert.ok(logs.some((l) => l.includes('no room under the ceiling for the same-site check')))
+  assert.ok(calls.length <= 5, `spawned ${calls.length}`)
+})
+
+test('a retried triage is paid for before the skeptics are counted: the ceiling holds', async () => {
+  // Ten agents: a scout, five finders, triage (and its retry), skeptics, a critic.
+  // The skeptics were counted from a budget taken before the retry, so the run
+  // spent an eleventh agent.
+  let tries = 0
+  const { result, calls } = await run(base({ agents: 10 }), {
+    find: (_p, opts) => ({ findings: [finding({ file: `src/${opts.label.slice('find:'.length)}.ts`, severity: 'low' })] }),
+    triage: (p) => (tries++ === 0 ? new Error('died') : { clusters: idsIn(p).map((id) => ({ ids: [id], rootCause: id })) }),
+  })
+  assert.ok(result.retried.includes('triage'))
+  assert.ok(calls.length <= 10, `spawned ${calls.length}`)
+  assert.equal(result.budget.used, calls.length)
+})
+
+// --- 0.4.0: reviewing a branch without a pull request ---------------------------
+
+test('a branch is reviewed without a pull request: every agent is told the branch and its base', async () => {
+  const args = { branch: 'feat/export-names', base: 'origin/main', title: 'Export names', diffs: ['/tmp/branch.diff'], headSha: SHA, agents: 20 }
+  const { result, calls } = await run(args, {
+    ...findersReturning({ correctness: [finding()], security: [finding({ line: 40 })] }),
+  })
+  assert.ok(calls.length > 4)
+  for (const c of calls) {
+    assert.ok(c.prompt.includes('BRANCH UNDER REVIEW: "feat/export-names" against "origin/main"'), c.label)
+    assert.doesNotMatch(c.prompt, /\bPRs?\b|[Pp]ull [Rr]equest/, `${c.label} still speaks of a pull request`)
+  }
+  assert.deepEqual(result.target, { branch: 'feat/export-names', base: 'origin/main' })
+  // A pull request reads as before.
+  const pr = await run(base({ agents: 20 }))
+  assert.ok(pr.calls.every((c) => c.prompt.includes('PULL REQUEST(S) UNDER REVIEW: #1 at commit')))
+  assert.deepEqual(pr.result.target, { prs: [1] })
+})
+
+test('a review names what it reviews: pull requests, or a branch with its base, never neither or both', async () => {
+  const bare = { diffs: [DIFF], headSha: SHA }
+  await assert.rejects(run(bare), /"prs" or a "branch"/)
+  await assert.rejects(run({ ...bare, prs: [1], branch: 'x', base: 'origin/main' }), /not both/)
+  await assert.rejects(run({ ...bare, branch: 'x' }), /"base"/)
+  await assert.rejects(run({ ...bare, branch: '  ', base: 'origin/main' }), /"branch"/)
+  await assert.rejects(run({ ...bare, branch: 'x', base: 7 }), /"base"/)
 })

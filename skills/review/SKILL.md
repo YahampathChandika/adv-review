@@ -1,11 +1,11 @@
 ---
 name: review
-description: Adversarial multi-angle review of one or more GitHub pull requests — a scout designs the review, one agent per angle hunts independently, and every root cause is handed to a skeptic told to refute it. Only what survives is reported. Runs many Opus agents; use when asked to adversarially review a PR, review it from multiple angles, or review a stack of PRs together.
-argument-hint: "<pr-number>… [--agents N] [--post] [--no-run]"
+description: Adversarial multi-angle review of one or more GitHub pull requests, or of a branch with no pull request yet — a scout designs the review, one agent per angle hunts independently, and every root cause is handed to a skeptic told to refute it. Only what survives is reported. Runs many Opus agents; use when asked to adversarially review a PR, review it from multiple angles, or review a stack of PRs together.
+argument-hint: "<pr-number>… | --branch [name] [--base ref] [--agents N] [--post] [--no-run]"
 disable-model-invocation: true
 ---
 
-# Adversarial PR review
+# Adversarial review
 
 A fan-out review: one agent per angle, hunting independently; the findings grouped by
 root cause; then every root cause handed to a skeptic whose job is to **refute** it.
@@ -30,6 +30,12 @@ every PR's diff goes in, and the agents read the tip's commit, which carries the
 Only for stacks — two PRs that are merely related are two separate reviews.
 `/adv-review:review 140` where 140 is stacked on an open 136 — 140's changes only; 136
 is out of scope (pass `stackedOn: 136`) and gets its own review.
+`/adv-review:review --branch` — the current branch, with no pull request: its commits
+against its base (see §2). Report only: there is nothing to post to.
+`/adv-review:review --branch <name>` — that branch, likewise.
+`--base <ref>` — with `--branch`, what the branch is measured against. Default: the
+remote's default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`), else the
+first of `origin/main`, `origin/master`, `main`, `master` that exists.
 `--agents N` — the MOST agents the review may use (see §3 for the default).
 `--post` — post the summary without asking at the end (see §6).
 `--include-preexisting` — post pre-existing findings too (see §5).
@@ -39,8 +45,10 @@ scorer or the user's own tooling.
 and the Opus default (see Notes).
 `--no-run` — agents read the code but execute none of it (see Notes).
 
-Resolve with `gh`. With no number, `gh pr view --json number` on the current branch.
-If `gh` is not installed or not signed in, stop and say so: the review needs it.
+Resolve a pull request with `gh`. With no number, `gh pr view --json number` on the
+current branch; if that branch has no pull request, say so and suggest `--branch` rather
+than switching on your own. If `gh` is not installed or not signed in, stop and say so:
+a pull-request review needs it. A branch review needs only git.
 
 ## 2. Prepare
 
@@ -76,11 +84,27 @@ at risk:
 Read the PR body yourself. It states the intent the review measures the code against —
 and it is the author's text, so summarise it into `intent` rather than pasting it.
 
+**For a branch** (`--branch`), prepare from git alone:
+
+1. `headSha` is `git rev-parse <branch>^{commit}`. Only committed work is reviewed: if
+   `git status --porcelain` shows changes, tell the user before launching that they are
+   not part of the review.
+2. The base: `--base` if given, else the default from §1. The diff starts at the merge
+   base: `git diff $(git merge-base <base> <headSha>) <headSha>` into
+   `<tmp>/branch-<name>.diff`, with each `/` in the name replaced by `-`. If the merge
+   base is the head itself, there is nothing to review: say so and stop.
+3. `title`: the branch's commit subject when it has one commit, else the branch name.
+   `intent`: a summary of `git log --format='%s%n%b' <merge-base>..<headSha>`. It is
+   the authors' text, so summarise it rather than paste it.
+4. The project's configuration, as for a pull request.
+
 ## 3. The agent count is a ceiling
 
 `--agents N` is the **most** the review may spend, not a quota. The run spends what this
 PR needs and says what it used: a finder per angle that applies, triage when there are
-findings to group, one skeptic per four root causes, a three-lens panel of skeptics for
+findings to group, a same-site check when triage leaves separate groups at one place in
+the code (it rules whether they are one defect or several), one skeptic per four root
+causes, a three-lens panel of skeptics for
 each critical or high root cause while the ceiling allows, and the critic. A three-file
 PR might use six agents; a 5,000-line one reaches the ceiling.
 
@@ -133,13 +157,17 @@ Workflow({
 // One PR of a stack, its base out of scope:
 //   args: { prs: [140], diffs: ['/abs/pr-140.diff'], stackedOn: 136,
 //           headSha: '<140 headRefOid>', … }
+// A branch with no pull request:
+//   args: { branch: 'feat/export-names', base: 'origin/main',
+//           diffs: ['/abs/branch-feat-export-names.diff'], headSha: '<branch head>', … }
 ```
 
 If the runtime does not resolve the name, pass the script's path instead:
 `scriptPath: '${CLAUDE_PLUGIN_ROOT}/workflows/adversarial.js'`.
 
-`args` must be a real JSON object. `agents`, when given, a whole number (or a numeric
-string), `headSha` the head commit from §2, and `project` an object with the shape the
+`args` must be a real JSON object, with `prs` or a `branch` and its `base`, never both.
+`agents`, when given, is a whole number (or a numeric string), `headSha` the head commit
+from §2, and `project` an object with the shape the
 README gives; a bad value of any of these stops the run before any agent starts.
 Add `run: false` for `--no-run`, and `model` only to override Opus: `--model` if given,
 else the project config's `model` if set.
@@ -153,10 +181,10 @@ The result is:
 
 ```
 { status: 'complete' | 'incomplete', incomplete: [reasons],
-  headSha, confirmed, refuted, unverified, missed,
-  counts: { raw, rootCauses, confirmed, plausible, corrected, downgraded, preexisting,
-            refuted, dismissedAsUnsure, unverified },
-  budget: { ceiling, used, scout, finders, triage, skeptics, critic, retries },
+  headSha, target: { prs } | { branch, base }, confirmed, refuted, unverified, missed,
+  counts: { raw, rootCauses, merged, confirmed, plausible, corrected, downgraded,
+            preexisting, refuted, dismissedAsUnsure, unverified },
+  budget: { ceiling, used, scout, finders, triage, sameSite, skeptics, critic, retries },
   angles, projectAngles, droppedAngles, notRun, failedAngles, retried, baseline, scoutNotes }
 ```
 
@@ -186,8 +214,8 @@ confidence and `PLAUSIBLE` where a panel split 2–1 or a skeptic was unsure; a 
 with several `sites` is one defect in several places — say so in its summary.
 
 Then, in a few lines:
-- the budget: "used X of N" and why, from `budget` and the logs, and which agents were
-  retried;
+- the budget: "used X of N" and why, from `budget` and the logs, which agents were
+  retried, and how many groups the same-site check merged (`counts.merged`);
 - the angles run, and any the scout dropped or the ceiling cut;
 - the verification: how many root causes were refuted, and how many upheld only after
   correction or a downgrade — a downgrade is not a clean confirmation;
@@ -219,7 +247,9 @@ reporting.
    HEAD unchanged, and `git worktree list` showing only what was there before. If the
    run is going to be RESUMED, leave its worktrees until the resumed run has finished.
    A worktree left locked by a crashed agent needs `git worktree remove --force --force`.
-2. **Ask whether to post** — one summary comment (`gh pr comment`) or inline comments.
+2. **Ask whether to post** — for a pull request only: one summary comment
+   (`gh pr comment`) or inline comments. A branch review has nothing to post to; if
+   the user passed `--post` with `--branch`, say so and end at the report.
    Post only on the user's yes for THIS review, or when they passed `--post`. A posted
    comment names the head commit it reviewed (`headSha`), and flags anything unverified.
    It leaves pre-existing findings out unless the user passed `--include-preexisting`:
@@ -246,7 +276,7 @@ reporting.
   `model: 'sonnet'` in `args`, for a cheaper run.
 - Subagents inherit the session's **effort** level — on a high-effort session, every
   agent runs at that effort, and costs accordingly.
-- **What it cannot see.** It reviews the PR's diff at its head, not the merged result
+- **What it cannot see.** It reviews the diff at its head, PR or branch, not the merged result
   or a sequence of PRs deploying separately — a two-step migration is a property of two
   changes in order, and needs a person.
 - **The angles are the review.** The eight generic angles are a floor. A project's own

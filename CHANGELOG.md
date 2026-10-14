@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — 0.4.0
+
+- `--branch [name]` reviews a branch with no pull request, against `--base` or the
+  remote's default branch. Committed work only; report only, nothing to post.
+- A same-site check after triage: when separate groups sit at the same place in the
+  code, one agent rules whether they are one defect or several. Only groups that share
+  a place can merge; a failed check, or no room under the ceiling, leaves them as
+  triage made them. The 0.3.0 calibration reported one path traversal twice.
+- Fixed: a retried triage could take a run one agent past its ceiling. The skeptics
+  are now counted from what is spent after triage, not before it.
+
 ## 0.3.0 — 2026-10-14
 
 Calibrated again on the same eleven PRs with Sonnet agents: all ten planted defects

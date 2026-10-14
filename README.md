@@ -5,8 +5,8 @@
 [![licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![platform](https://img.shields.io/badge/platform-Claude%20Code-informational)
 
-Adversarial pull-request review for [Claude Code](https://code.claude.com). A scout
-designs the review for the specific PR, one agent per angle hunts independently, the
+Adversarial review of pull requests and branches for [Claude Code](https://code.claude.com).
+A scout designs the review for the specific change, one agent per angle hunts independently, the
 findings are grouped by root cause, and every root cause is handed to a skeptic whose
 job is to refute it. The report contains only what survived that attempt, labels
 anything that could not be verified, and names who found and who checked each finding
@@ -33,8 +33,9 @@ on the two clean PRs. See [Calibration](#calibration).
    ```
    /adv-review:review 140
    ```
-   The first run asks for permission to run the workflow. A review takes roughly fifteen
-   minutes to an hour and runs in the background; `/workflows` shows progress.
+   For a branch with no pull request yet, `/adv-review:review --branch`. The first run
+   asks for permission to run the workflow. A review takes roughly fifteen minutes to an
+   hour and runs in the background; `/workflows` shows progress.
 5. **Read the report.** Findings are listed most severe first, each with the failure the
    skeptics could not refute. The session then asks whether to post a summary comment on
    the PR. Nothing is posted, committed or pushed without your confirmation.
@@ -67,7 +68,7 @@ PR's head commit. It runs in five phases.
 | :- | :- | :- |
 | Scout | 1 | Reads the diff and the surrounding files, runs the project's own checks on the PR's head, then designs the review: drops the angles this diff cannot trip, with a reason each; points the kept angles at the code that could fail; adds angles specific to this PR; ranks them. |
 | Review | 1 per angle | Each finder hunts its angle alone, blind to the others. A finding must state a concrete failure: inputs or state, and the wrong outcome. Style is not a finding. A test that cannot fail is reported as evidence on the defect it hides, not as a finding of its own, and not at all when the code under it is correct. |
-| Triage | 1 | Groups findings by root cause, so a defect reported at six call sites is verified once. |
+| Triage | 1, plus 1 when needed | Groups findings by root cause, so a defect reported at six call sites is verified once. When separate groups sit at the same place in the code, a same-site check rules whether they are one defect or several. |
 | Verify | 1 per 4 root causes | Each root cause goes to a skeptic instructed to refute it. An unsure verdict counts as refuted. Critical and high root causes get a three-lens panel (reachable? mechanism right? consequence real?) decided by majority. |
 | Synthesis | 1 | A critic asks what no angle would have caught, and is told what the scout ruled out so a wrong drop is visible. |
 
@@ -106,7 +107,8 @@ has actually shipped, are what find the next one; see [Configuration](#configura
 
 - Claude Code with dynamic workflows (available on all paid plans; on Pro, enable the
   **Dynamic workflows** row in `/config`).
-- The [GitHub CLI](https://cli.github.com), signed in to the repository's host.
+- The [GitHub CLI](https://cli.github.com), signed in to the repository's host, for
+  pull-request reviews. A branch review needs only git.
 - git 2.5 or later, for worktrees.
 
 **Install from the marketplace**
@@ -134,13 +136,16 @@ Run from a session in the repository, on any branch.
 | `/adv-review:review` | the PR for the current branch |
 | `/adv-review:review 140` | PR 140 |
 | `/adv-review:review 136 140` | a stack, as one body of work (140 built on 136) |
+| `/adv-review:review --branch` | the current branch against its base, with no pull request |
+| `/adv-review:review --branch NAME` | that branch against its base |
 
 | Option | Effect |
 | :- | :- |
+| `--base REF` | with `--branch`, what the branch is measured against; default the remote's default branch |
 | `--agents N` | the most agents the run may use; see [The agent ceiling](#the-agent-ceiling) |
 | `--model NAME` | the subagents' model for this run, overriding the project config and the Opus default |
 | `--no-run` | agents read the code but execute none of it; see [Security](#security) |
-| `--post` | post the summary comment without asking |
+| `--post` | post the summary comment without asking; pull requests only |
 | `--out PATH` | also write the result JSON to a file |
 | `--include-preexisting` | include pre-existing findings in the posted comment |
 
@@ -227,8 +232,8 @@ above are the form to follow.
 - The review covers the diff at the PR's head, not the merged result and not a sequence
   of PRs deploying in order. Rollout ordering needs a person.
 - It does not fix anything. A review ends at the report.
-- It requires a GitHub pull request. Reviewing a local branch without one is not
-  supported.
+- A branch review covers committed work only, and has nothing to post to. Uncommitted
+  changes are not reviewed.
 
 ## Security
 
