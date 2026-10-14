@@ -293,9 +293,11 @@ Repository layout:
 
 ## Background
 
-The tool was extracted from a private project, where it reviewed around fifteen pull
-requests and confirmed about a hundred defects, most of them after a skeptic had
-narrowed the original claim. The generic angles are what remained of that project's
+The adversarial method this plugin implements, independent reviewers whose findings
+must survive a reviewer told to refute them, was introduced to the author by
+[r3core](https://github.com/r3core). The tool was extracted from a private project,
+where it reviewed around fifteen pull requests and confirmed about a hundred defects,
+most of them after a skeptic had narrowed the original claim. The generic angles are what remained of that project's
 angle list once its history was removed. The ratios (30% of the ceiling held back,
 four root causes per skeptic, a panel for anything high or critical) were chosen from
 what stalled and what was missed in those runs, and then checked against the
