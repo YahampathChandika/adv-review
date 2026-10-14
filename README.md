@@ -12,9 +12,9 @@ job is to refute it. The report contains only what survived that attempt, labels
 anything that could not be verified, and names who found and who checked each finding
 and at which commit.
 
-On a public calibration set of eleven PRs with ten planted defects, the 0.3.0 release
-confirmed all ten, wrongly refuted none, and reported no false positives, including none
-on the two clean PRs. See [Calibration](#calibration).
+On a public calibration set of 21 PRs with 18 planted defects, the 0.4.0 release
+confirmed 17 and wrongly refuted none. Every finding it confirmed was true, and the four
+clean PRs drew no findings. See [Calibration](#calibration).
 
 ## Quick start
 
@@ -261,13 +261,17 @@ bites, the scorer, the result files and every adjudication are in
 [`calibration/`](calibration/README.md). Both passes used Sonnet agents, so the numbers
 are a floor for the default Opus configuration.
 
-| | 0.3.0 | 0.2.0 |
-| :- | :- | :- |
-| Planted defects confirmed | 10 of 10, none wrongly refuted | 10 of 10 |
-| Confirmed findings true | 15 of 15 | 20 of 25 |
-| Findings on the two clean PRs | none | 3, all false |
-| Agents per PR | 3 to 18 | 7 to 20 |
-| Time per PR | 15 to 28 minutes | 13 to 28 minutes |
+| | 0.4.0, both sets | 0.3.0, first set | 0.2.0, first set |
+| :- | :- | :- | :- |
+| Planted defects confirmed | 17 of 18, none wrongly refuted | 10 of 10 | 10 of 10 |
+| Confirmed findings true | 33 of 33 | 15 of 15 | 20 of 25 |
+| Findings on the clean PRs | none, on four | none, on two | 3, all false, on two |
+| Agents per PR | 3 to 20 | 3 to 18 | 7 to 20 |
+| Time per PR | 10 to 35 minutes | 15 to 28 minutes | 13 to 28 minutes |
+
+On the first set, 0.4.0 confirmed 9 of 10. No finder opened the file of the one it
+missed; the critic named it, but the critic's gaps are not verified. All eight defects
+of the second set were confirmed.
 
 The 0.2.0 false positives were all notes on weak tests over correct code; 0.3.0 made a
 blind test evidence on the defect it hides rather than a finding of its own.

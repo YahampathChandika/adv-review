@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased — 0.4.0
+## 0.4.0 — 2026-10-15
+
+Calibrated on both sets with Sonnet agents: 17 of 18 planted defects confirmed, none
+wrongly refuted; 33 of 33 confirmed findings true; no findings on the four clean PRs.
+The one miss, D3, was named by the critic but not verified. See `calibration/README.md`.
 
 - `--branch [name]` reviews a branch with no pull request, against `--base` or the
   remote's default branch. Committed work only; report only, nothing to post.
@@ -21,9 +25,6 @@
 - `calibration/run.sh` takes `branch:<ref>` targets, and now stops each session it
   starts. It used to stop the shell around the session instead, so every review session
   of a pass kept running after it finished.
-- Calibrated (candidate): on v1, 9 of 10 planted defects confirmed and 15 of 15 findings
-  true; on v2, 8 of 8 and 18 of 18; no findings on the four clean PRs. The one miss, D3,
-  was named by the critic but not verified. See `calibration/README.md`.
 
 ## 0.3.0 — 2026-10-14
 

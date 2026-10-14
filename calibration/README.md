@@ -125,7 +125,7 @@ it would at a PR of yours. The answer key is not reachable from any branch.
 
 ## Results
 
-### 0.4.0 candidate — 14 October 2026, Sonnet agents
+### 0.4.0 — 14 October 2026, Sonnet agents
 
 Both sets, after the same-site check and branch review: one review per PR from a fresh
 clone with `run.sh` in two lanes, Sonnet agents, Opus orchestrating, the computed
