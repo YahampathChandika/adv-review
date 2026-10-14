@@ -2,7 +2,7 @@
 // Score recorded adv-review results against the planted-defect manifest.
 //
 //   node calibration/score.mjs [--results calibration/results] [--manifest calibration/manifest.json]
-//                              [--window 5] [--min-recall 0.7] [--offline] [--json]
+//                              [--window 5] [--min-recall 0.7] [--set v2] [--offline] [--json]
 //
 // --results defaults to the newest calibration/results/<version>/ folder.
 //
@@ -37,6 +37,8 @@ const newestResults = () => {
 }
 const resultsDir = opt('results', newestResults())
 const window = Number(opt('window', 5))
+// --set v2, or --set v1,v2: score only the PRs in those sets.
+const sets = opt('set', null)?.split(',').map((x) => x.trim()).filter(Boolean) ?? null
 const minRecall = opt('min-recall', null)
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
@@ -62,7 +64,7 @@ if (!flag('offline')) {
   }
 }
 
-const scored = score({ manifest, results, heads, window })
+const scored = score({ manifest, results, heads, window, sets })
 console.log(flag('json') ? JSON.stringify(scored, null, 2) : format(scored))
 if (minRecall !== null && scored.summary.recall !== null && scored.summary.recall < Number(minRecall)) {
   console.error(`recall ${scored.summary.recall.toFixed(2)} is below ${minRecall}`)

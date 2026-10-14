@@ -10,6 +10,12 @@
   triage made them. The 0.3.0 calibration reported one path traversal twice.
 - Fixed: a retried triage could take a run one agent past its ceiling. The skeptics
   are now counted from what is spent after triage, not before it.
+- A second, harder calibration set: the fixture gains interest, webhooks and a read
+  cache, and PRs #12 to #21 carry eight defects that need more than the changed lines
+  to see, plus two clean PRs. The answer key labels each entry with its set; the scorer
+  reports each set and takes `--set`.
+- `calibration/verify/verify.mjs` shows every planted defect biting on its branch, from
+  a clone of the fixture.
 
 ## 0.3.0 — 2026-10-14
 

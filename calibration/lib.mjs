@@ -14,14 +14,14 @@ const matches = (f, entry, window) => sitesOf(f).some((s) => entry.sites.some((d
 const label = (f) => `${f.file}:${f.line} ${f.title} [${f.severity}]`
 
 /**
- * @param manifest  { repository, defects: [{ id, pr, angle, severity, sites: [{ file, lines: [lo, hi] }] }], clean: [{ pr }], known: [{ id, sites }] }
+ * @param manifest  { repository, defects: [{ id, pr, set, angle, severity, sites: [{ file, lines: [lo, hi] }] }], clean: [{ pr, set }], known: [{ id, sites }], adjudicated: [{ pr, truth, sites }] }
  * @param results   [{ pr, result }] — each `result` is what the review's --out wrote
  * @param heads     { [pr]: headSha } — the PRs' current heads, when known; a result for another commit is skipped
+ * @param sets      only score PRs in these sets (an entry without a set is in 'v1'); all when omitted
  */
-export function score({ manifest, results, heads = {}, window = 5 }) {
+export function score({ manifest, results, heads = {}, window = 5, sets = null }) {
   const rows = []
-  const totals = { reviewed: 0, planted: 0, found: 0, wronglyRefuted: 0, missed: 0, confirmed: 0, plantedMatched: 0, preexisting: 0, known: 0, adjudicatedTrue: 0, adjudicatedFalse: 0, unplanned: 0 }
-  const byAngle = {}
+  const entryOf = (pr) => manifest.defects.find((d) => d.pr === pr) ?? (manifest.clean ?? []).find((c) => c.pr === pr)
   for (const { pr, result } of [...results].sort((a, b) => a.pr - b.pr)) {
     const defects = manifest.defects.filter((d) => d.pr === pr)
     const clean = (manifest.clean ?? []).some((c) => c.pr === pr)
@@ -29,6 +29,8 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
       rows.push({ pr, note: 'not in the manifest — skipped' })
       continue
     }
+    const set = entryOf(pr).set ?? 'v1'
+    if (sets && !sets.includes(set)) continue
     const head = heads[pr]
     if (head && result.headSha && !(head.startsWith(result.headSha) || result.headSha.startsWith(head))) {
       rows.push({ pr, note: `stale: reviewed ${result.headSha.slice(0, 7)}, the PR is at ${head.slice(0, 7)} — skipped` })
@@ -82,29 +84,15 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
       }
       unplanned.push(label(f))
     }
-    for (const d of defects) {
-      const a = (byAngle[d.angle] ??= { planted: 0, found: 0 })
-      a.planted += 1
-      if (found.some((x) => x.id === d.id)) a.found += 1
-    }
-    totals.reviewed += 1
-    totals.planted += defects.length
-    totals.found += found.length
-    totals.wronglyRefuted += wronglyRefuted.length
-    totals.missed += missed.length
-    totals.confirmed += confirmed.length
-    totals.preexisting += preexisting.length
-    totals.known += known.length
-    totals.plantedMatched += plantedMatched
-    totals.adjudicatedTrue += adjudicatedTrue.length
-    totals.adjudicatedFalse += adjudicatedFalse.length
-    totals.unplanned += unplanned.length
     rows.push({
       pr,
+      set,
       kind: clean ? 'clean' : 'planted',
       status: result.status ?? null,
       agents: result.budget?.used ?? null,
       planted: defects.map((d) => d.id),
+      plantedAngles: defects.map((d) => ({ id: d.id, angle: d.angle })),
+      confirmedCount: confirmed.length,
       found,
       wronglyRefuted,
       missed,
@@ -116,17 +104,47 @@ export function score({ manifest, results, heads = {}, window = 5 }) {
       unplanned,
     })
   }
+  const setNames = [...new Set(rows.filter((r) => !r.note).map((r) => r.set))].sort()
+  const bySet = Object.fromEntries(setNames.map((name) => [name, summarise(rows.filter((r) => r.set === name))]))
+  return { rows, summary: { ...summarise(rows), bySet } }
+}
+
+/** Totals, recall, precision and recall by angle over scored rows. */
+function summarise(rows) {
+  const scored = rows.filter((r) => !r.note)
+  const sum = (f) => scored.reduce((n, r) => n + f(r), 0)
+  const totals = {
+    reviewed: scored.length,
+    planted: sum((r) => r.planted.length),
+    found: sum((r) => r.found.length),
+    wronglyRefuted: sum((r) => r.wronglyRefuted.length),
+    missed: sum((r) => r.missed.length),
+    confirmed: sum((r) => r.confirmedCount),
+    plantedMatched: sum((r) => r.plantedMatched),
+    preexisting: sum((r) => r.preexisting.length),
+    known: sum((r) => r.known.length),
+    adjudicatedTrue: sum((r) => r.adjudicatedTrue.length),
+    adjudicatedFalse: sum((r) => r.adjudicatedFalse.length),
+    unplanned: sum((r) => r.unplanned.length),
+  }
+  const byAngle = {}
+  for (const r of scored) {
+    for (const d of r.plantedAngles) {
+      const a = (byAngle[d.angle] ??= { planted: 0, found: 0 })
+      a.planted += 1
+      if (r.found.some((x) => x.id === d.id)) a.found += 1
+    }
+  }
   // Precision is over confirmed findings that are not pre-existing. A finding
   // nobody has adjudicated counts against it: unknown is not true.
   const judged = totals.confirmed - totals.preexisting
   const falsePositives = totals.unplanned + totals.adjudicatedFalse
-  const summary = {
+  return {
     ...totals,
     recall: totals.planted ? totals.found / totals.planted : null,
     precision: judged ? (judged - falsePositives) / judged : null,
     byAngle,
   }
-  return { rows, summary }
 }
 
 const pct = (x) => (x === null ? 'n/a' : `${Math.round(x * 100)}%`)
@@ -159,5 +177,13 @@ export function format({ rows, summary }) {
   out.push(`precision ${pct(s.precision)}: ${judged - s.unplanned - s.adjudicatedFalse} of ${judged} confirmed findings true (${s.plantedMatched} on planted defects, ${s.known} known, ${s.adjudicatedTrue} adjudicated true); ${s.adjudicatedFalse} adjudicated false; ${s.unplanned} to adjudicate, counted false; ${s.preexisting} pre-existing left out`)
   const angles = Object.entries(s.byAngle)
   if (angles.length) out.push(`by angle: ${angles.map(([a, v]) => `${a} ${v.found}/${v.planted}`).join(', ')}`)
+  const setNames = Object.keys(s.bySet ?? {})
+  if (setNames.length > 1) {
+    for (const name of setNames) {
+      const t = s.bySet[name]
+      const j = t.confirmed - t.preexisting
+      out.push(`set ${name}: recall ${pct(t.recall)} (${t.found} of ${t.planted}), precision ${pct(t.precision)} (${j - t.unplanned - t.adjudicatedFalse} of ${j}) across ${t.reviewed} PRs`)
+    }
+  }
   return out.join('\n')
 }

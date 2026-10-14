@@ -253,9 +253,11 @@ posted by the session, after your confirmation, under your `gh` identity.
 
 The review is measured against a public fixture with known defects,
 [adv-review-calibration](https://github.com/YahampathChandika/adv-review-calibration):
-a small ledger service whose eleven pull requests carry ten planted defects across the
-eight generic angles, with two PRs left clean to measure false positives. The answer
-key, the scorer, the result files and every adjudication are in
+a small ledger service with two sets of pull requests carrying planted defects, and
+clean PRs to measure false positives. The first set, eleven PRs, has ten defects across
+the eight generic angles; the second, ten PRs, has eight harder ones that need more
+than the changed lines to see. The answer key, the checker that shows every defect
+bites, the scorer, the result files and every adjudication are in
 [`calibration/`](calibration/README.md). Both passes used Sonnet agents, so the numbers
 are a floor for the default Opus configuration.
 

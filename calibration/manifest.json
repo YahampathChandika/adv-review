@@ -1,7 +1,6 @@
 {
   "schema": 1,
   "repository": "YahampathChandika/adv-review-calibration",
-  "base": "89da56f4d9e0ea6184984cea8e96f5f710983aa7",
   "note": "The answer key for the fixture. Sites are file and lines at each branch head; the scorer matches within a window.",
   "defects": [
     {
@@ -25,7 +24,8 @@
           ]
         }
       ],
-      "head": "5af451d1118a286fc59dd8d1ca957e4c5aebecf4"
+      "head": "5af451d1118a286fc59dd8d1ca957e4c5aebecf4",
+      "set": "v1"
     },
     {
       "id": "D2",
@@ -56,7 +56,8 @@
           ]
         }
       ],
-      "head": "15dd7c4aaa0be03d4171fb77b94b233d29f75046"
+      "head": "15dd7c4aaa0be03d4171fb77b94b233d29f75046",
+      "set": "v1"
     },
     {
       "id": "D3",
@@ -84,7 +85,8 @@
           ]
         }
       ],
-      "head": "ec38b7f4818c2cd7a7aee111ab72a7bfe1d786e7"
+      "head": "ec38b7f4818c2cd7a7aee111ab72a7bfe1d786e7",
+      "set": "v1"
     },
     {
       "id": "D4",
@@ -121,7 +123,8 @@
           ]
         }
       ],
-      "head": "88d0e534ac12020b2a6f616da97efb8b360d5676"
+      "head": "88d0e534ac12020b2a6f616da97efb8b360d5676",
+      "set": "v1"
     },
     {
       "id": "D5",
@@ -163,7 +166,8 @@
           ]
         }
       ],
-      "head": "5ff5809a7176caf08fc66f3395df95848fca20e6"
+      "head": "5ff5809a7176caf08fc66f3395df95848fca20e6",
+      "set": "v1"
     },
     {
       "id": "D6",
@@ -198,7 +202,8 @@
           ]
         }
       ],
-      "head": "5d9e288679769335a688cda4db28d8b2a64b4675"
+      "head": "5d9e288679769335a688cda4db28d8b2a64b4675",
+      "set": "v1"
     },
     {
       "id": "D7",
@@ -219,7 +224,8 @@
           ]
         }
       ],
-      "head": "036830a04e80ca63d934f178397b7d640e59d0cc"
+      "head": "036830a04e80ca63d934f178397b7d640e59d0cc",
+      "set": "v1"
     },
     {
       "id": "D8",
@@ -240,7 +246,8 @@
           ]
         }
       ],
-      "head": "036830a04e80ca63d934f178397b7d640e59d0cc"
+      "head": "036830a04e80ca63d934f178397b7d640e59d0cc",
+      "set": "v1"
     },
     {
       "id": "D9",
@@ -268,7 +275,8 @@
           ]
         }
       ],
-      "head": "074592689156ce5df3f42042a91dffbd81dfed27"
+      "head": "074592689156ce5df3f42042a91dffbd81dfed27",
+      "set": "v1"
     },
     {
       "id": "D10",
@@ -303,7 +311,290 @@
           ]
         }
       ],
-      "head": "016008ca54a8acd3cc007b6c6c0ce2344685b86b"
+      "head": "016008ca54a8acd3cc007b6c6c0ce2344685b86b",
+      "set": "v1"
+    },
+    {
+      "id": "D11",
+      "set": "v2",
+      "branch": "feat/fraud-screening",
+      "pr": 12,
+      "angle": "data-integrity",
+      "alsoTrips": [
+        "correctness"
+      ],
+      "severity": "high",
+      "title": "The funds check and the debit straddle an await, so concurrent transfers overdraw",
+      "summary": "transfer() became async and awaits the screen between the balance check and the debit. Two transfers from one account interleave at that await: both pass the check against the same balance, then each writes a balance computed from the row it read before awaiting. docs/security.md: every path that moves money checks the balance it moves from at the moment it moves it.",
+      "failure": "An account holds $1,500; two $1,000 transfers arrive together. Both pass the funds check, both succeed; the account ends at $500, the receiver at $1,000, and $2,000 of transfers are on record.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            29,
+            36
+          ]
+        },
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            16,
+            16
+          ]
+        }
+      ],
+      "head": "d8caf340eef7f0f44c72f131d3f6f4b042ef6810"
+    },
+    {
+      "id": "D12",
+      "set": "v2",
+      "branch": "feat/cache-account-list",
+      "pr": 13,
+      "angle": "data-integrity",
+      "alsoTrips": [],
+      "severity": "medium",
+      "title": "The list cache is cleared by transfers and deposits only; opening, closing and interest leave it stale",
+      "summary": "GET /accounts is cached per owner for 30 seconds and forgotten only in transfer() and deposit(). openAccount and closeAccount in accounts.js and the interest job in interest.js change what the list shows and never clear it. Main already invalidates the single-account cache through the store's change hook, which this cache does not use.",
+      "failure": "Open an account, list, open a second: the list still says one account for up to 30 seconds. Close one: it is listed as open. Accrue interest: the old balance is listed.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            47,
+            47
+          ]
+        },
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            39,
+            40
+          ]
+        },
+        {
+          "file": "src/transfers.js",
+          "lines": [
+            55,
+            55
+          ]
+        },
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            9,
+            26
+          ]
+        },
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            46,
+            53
+          ]
+        },
+        {
+          "file": "src/interest.js",
+          "lines": [
+            30,
+            30
+          ]
+        }
+      ],
+      "head": "f9885a2d214fad13783549473781a3855694632b"
+    },
+    {
+      "id": "D13",
+      "set": "v2",
+      "branch": "feat/interest-timer",
+      "pr": 14,
+      "angle": "correctness",
+      "alsoTrips": [],
+      "severity": "high",
+      "title": "The once-a-day guard compares the local day with a UTC day, so interest is credited every hour for part of each day",
+      "summary": "accrueInterest skips an account when lastAccruedOn equals today, where today is the local calendar day (toLocaleDateString), but it stores at.slice(0, 10), the UTC day. Wherever the local day differs from the UTC day, ten or eleven hours of every day in Sydney, the two never match and the hourly timer credits the account again each hour. The test pins noon UTC, where they agree.",
+      "failure": "TZ=Australia/Sydney, 07:00 local on 2 March (20:00 UTC on 1 March): three runs credit three days' interest; the hourly timer credits about ten a day.",
+      "sites": [
+        {
+          "file": "src/interest.js",
+          "lines": [
+            16,
+            16
+          ]
+        },
+        {
+          "file": "src/interest.js",
+          "lines": [
+            24,
+            35
+          ]
+        }
+      ],
+      "head": "0bf23917ade72ebeb93704c555a8504baff245e7"
+    },
+    {
+      "id": "D14",
+      "set": "v2",
+      "branch": "feat/idempotency-keys",
+      "pr": 15,
+      "angle": "authz-and-attribution",
+      "alsoTrips": [
+        "security"
+      ],
+      "severity": "high",
+      "title": "Idempotency keys are global, so one user's key returns another user's transfer",
+      "summary": "remembered() finds a key by its value alone, not by the user who sent it. A second user who sends a key the first user already used gets the first user's transfer back as the response, with its accounts, amount and memo, and their own transfer silently never happens.",
+      "failure": "Member A transfers with Idempotency-Key 'order-1'. Member B posts their own transfer with the same key: B receives A's transfer as a 201, and B's money does not move.",
+      "sites": [
+        {
+          "file": "src/idempotency.js",
+          "lines": [
+            14,
+            14
+          ]
+        },
+        {
+          "file": "src/idempotency.js",
+          "lines": [
+            19,
+            19
+          ]
+        },
+        {
+          "file": "src/server.js",
+          "lines": [
+            89,
+            96
+          ]
+        }
+      ],
+      "head": "cc2c253bb916c2bb8b2d0ec72193e33814194eef"
+    },
+    {
+      "id": "D15",
+      "set": "v2",
+      "branch": "feat/account-webhooks",
+      "pr": 16,
+      "angle": "security",
+      "alsoTrips": [],
+      "severity": "high",
+      "title": "The server sends requests to any http(s) URL a member supplies (SSRF)",
+      "summary": "setWebhook accepts any http or https URL and the notifier POSTs every event for the account to it from the server. A member can point it at internal addresses: cloud metadata, localhost services, the private network. docs/security.md: the service never requests a URL a user supplied.",
+      "failure": "A member sets http://169.254.169.254/latest/meta-data/ as the account's webhook; it is accepted, and the next deposit makes the server POST to the metadata address.",
+      "sites": [
+        {
+          "file": "src/accounts.js",
+          "lines": [
+            69,
+            81
+          ]
+        },
+        {
+          "file": "src/webhooks.js",
+          "lines": [
+            38,
+            38
+          ]
+        },
+        {
+          "file": "src/server.js",
+          "lines": [
+            105,
+            109
+          ]
+        }
+      ],
+      "head": "f7520841c763d950e4f570b8a1092a58b1774f17"
+    },
+    {
+      "id": "D16",
+      "set": "v2",
+      "branch": "refactor/memo-to-note",
+      "pr": 17,
+      "angle": "migrations-and-rollout",
+      "alsoTrips": [],
+      "severity": "medium",
+      "title": "The new readers ignore memo, so transfers written by the previous release lose their memo mid-rollout",
+      "summary": "The migration is additive and new transfers write both keys, but publicTransfer and the CSV export read only note. During the rollout the previous release still writes memo alone, and its pick() strips note, so every transfer it records shows an empty memo through the new release. docs/deploy.md: readers tolerate both shapes during the window, falling back to the old key.",
+      "failure": "Mid-rollout, a copy of the previous release records a transfer with memo 'rent'; the new release's API and export show it with an empty memo.",
+      "sites": [
+        {
+          "file": "src/serialize.js",
+          "lines": [
+            26,
+            26
+          ]
+        },
+        {
+          "file": "src/export.js",
+          "lines": [
+            19,
+            19
+          ]
+        }
+      ],
+      "head": "e54bd9eabcfdc0e0ba5b6f946f16b6c1c2e31517"
+    },
+    {
+      "id": "D17",
+      "set": "v2",
+      "branch": "feat/interest-round-to-cent",
+      "pr": 18,
+      "angle": "correctness",
+      "alsoTrips": [
+        "tests-that-dont-test"
+      ],
+      "severity": "medium",
+      "title": "Interest is rounded to a hundredth of a cent, so balances stop being whole cents",
+      "summary": "dailyInterest multiplies by 100 and divides by 100 as if the amount were dollars, so it rounds to two decimal places of a cent: $1,000 at 5% earns 13.7 cents a day, not 14. Balances become fractional, against the rule that amounts are whole cents. The PR updates the tests' expected values to 13.7 and 100013.7 without remark.",
+      "failure": "An account of $1,000 at 5%: one day's interest makes the balance 100013.7 cents; the API, the export and every later calculation carry the fraction.",
+      "sites": [
+        {
+          "file": "src/interest.js",
+          "lines": [
+            13,
+            13
+          ]
+        },
+        {
+          "file": "test/interest.test.js",
+          "lines": [
+            10,
+            10
+          ]
+        },
+        {
+          "file": "test/interest.test.js",
+          "lines": [
+            27,
+            27
+          ]
+        }
+      ],
+      "head": "f278b0c346ce2ad4e6fb68b3654f61ff3181657f"
+    },
+    {
+      "id": "D18",
+      "set": "v2",
+      "branch": "feat/freeze-account",
+      "pr": 19,
+      "angle": "authz-and-attribution",
+      "alsoTrips": [
+        "security"
+      ],
+      "severity": "high",
+      "title": "The freeze webhook is sent before the ownership check, so any member can freeze anyone's card",
+      "summary": "The freeze route notifies the card processor first and only then calls freezeAccount, which checks ownership. A member who posts a freeze for someone else's account gets a 404, but the account.freeze-requested event has already gone out with that account's id. docs/security.md: authorise before any observable effect, webhooks included.",
+      "failure": "Member O posts POST /accounts/<member M's account>/freeze: the answer is 404, and the card processor receives account.freeze-requested for M's account.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            115,
+            116
+          ]
+        }
+      ],
+      "head": "1cac44578f11f347ba81a0079de446337b81b27d"
     }
   ],
   "clean": [
@@ -311,13 +602,29 @@
       "branch": "feat/account-audit",
       "pr": 10,
       "title": "Audit trail per account",
-      "head": "6040444b2e7da9774a98c28c7c8d15d73b175150"
+      "head": "6040444b2e7da9774a98c28c7c8d15d73b175150",
+      "set": "v1"
     },
     {
       "branch": "feat/export-currency",
       "pr": 11,
       "title": "Export: a currency column",
-      "head": "be23305b3c846e94b25272aaabde16aa55e3fc21"
+      "head": "be23305b3c846e94b25272aaabde16aa55e3fc21",
+      "set": "v1"
+    },
+    {
+      "set": "v2",
+      "branch": "feat/show-interest-rate",
+      "pr": 20,
+      "title": "Show each account's interest rate",
+      "head": "7c94983ac3a95ac4c09e363853073eff1cf9c196"
+    },
+    {
+      "set": "v2",
+      "branch": "feat/webhook-delivery-id",
+      "pr": 21,
+      "title": "Webhooks: a delivery id for de-duplicating retries",
+      "head": "e9f6f76a791dd86f98ab91c01dc31dc5004a3cfe"
     }
   ],
   "known": [
@@ -594,5 +901,9 @@
       ],
       "note": "True. Before this PR the route spread the body (`{ ...body, \u2026 }`), which tolerates null; the rewrite reads `body.label` directly, so a literal null JSON body throws and answers 500 instead of 400. Introduced at this line by the PR; the same class as the null-body finding on #7. Medium is fair."
     }
-  ]
+  ],
+  "bases": {
+    "v1": "89da56f4d9e0ea6184984cea8e96f5f710983aa7",
+    "v2": "7fc1c3c4366b2c505ecc19e47b8bc9686cd63a34"
+  }
 }

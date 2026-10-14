@@ -131,3 +131,34 @@ test('the text report carries the counts a reader needs', () => {
   assert.match(text, /precision 100%: 1 of 1 confirmed findings true \(1 on planted defects, 0 known, 0 adjudicated true\); 0 adjudicated false; 0 to adjudicate, counted false; 0 pre-existing left out/)
   assert.match(text, /by angle: correctness 1\/1, security 0\/1/)
 })
+
+test('results are summarised per set as well as overall, and a set can be scored alone', () => {
+  const sets2 = {
+    ...manifest,
+    defects: [
+      ...manifest.defects.map((d) => ({ ...d, set: 'v1' })),
+      { id: 'D9', pr: 9, set: 'v2', angle: 'security', severity: 'high', sites: [{ file: 'src/z.js', lines: [3, 3] }] },
+    ],
+    clean: [{ pr: 3, set: 'v1' }, { pr: 10, set: 'v2' }],
+  }
+  const results = [
+    { pr: 1, result: { confirmed: [finding('src/a.js', 40)] } },
+    { pr: 9, result: { confirmed: [finding('src/z.js', 3)] } },
+    { pr: 10, result: { confirmed: [finding('src/q.js', 1)] } },
+  ]
+  const both = score({ manifest: sets2, results })
+  assert.equal(both.summary.recall, 2 / 3)
+  assert.deepEqual(Object.keys(both.summary.bySet), ['v1', 'v2'])
+  assert.equal(both.summary.bySet.v1.recall, 0.5)
+  assert.equal(both.summary.bySet.v2.recall, 1)
+  assert.equal(both.summary.bySet.v2.precision, 0.5)
+  assert.equal(both.summary.bySet.v2.reviewed, 2)
+  assert.deepEqual(both.summary.bySet.v2.byAngle, { security: { planted: 1, found: 1 } })
+  const text = format(both)
+  assert.match(text, /set v1: recall 50% \(1 of 2\), precision 100% \(1 of 1\) across 1 PRs/)
+  assert.match(text, /set v2: recall 100% \(1 of 1\), precision 50% \(1 of 2\) across 2 PRs/)
+  const v2 = score({ manifest: sets2, results, sets: ['v2'] })
+  assert.deepEqual(v2.rows.map((r) => r.pr), [9, 10])
+  assert.equal(v2.summary.recall, 1)
+  assert.doesNotMatch(format(v2), /^set /m, 'one set: no per-set lines')
+})

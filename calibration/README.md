@@ -5,9 +5,16 @@ This directory measures that against a fixture with known defects.
 
 - **The fixture**: [adv-review-calibration](https://github.com/YahampathChandika/adv-review-calibration),
   a small ledger service (accounts, transfers, a JSON store with migrations, bearer
-  tokens, an audit log, CSV export; no dependencies). Its `main` is meant to be clean.
-  Each pull request adds a feature in the ordinary way; most carry one planted defect
-  that the PR's own tests do not catch, two carry none.
+  tokens, an audit log, CSV export, daily interest, outgoing webhooks, a read cache; no
+  dependencies). Its `main` is meant to be clean. Each pull request adds a feature in the
+  ordinary way; most carry one planted defect that the PR's own tests do not catch, and
+  four carry none. There are two sets:
+  - **v1**, PRs #1 to #11: ten defects across the eight generic angles, on the service
+    before interest, webhooks and the cache. Each can be seen in the changed lines with
+    care.
+  - **v2**, PRs #12 to #21: eight harder defects on the grown service. Each needs more
+    than the changed lines: an interleaving at an `await`, a writer in another file, a
+    time zone, a second user, a rule written in `docs/`.
 - **The answer key**: `manifest.json`. One entry per planted defect: the branch and PR,
   the angle it is meant to trip, severity, what is wrong, a concrete failure, and the
   file and lines at the branch head. Plus the clean PRs, and `known` defects on `main`
@@ -36,8 +43,31 @@ This directory measures that against a fixture with known defects.
 Two PRs, #10 *Audit trail per account* and #11 *Export: a currency column*, are clean. A
 finding on them is a false positive until a person says otherwise.
 
-Every defect was shown to bite on its branch before the key was written: the script
-that does so is not part of the fixture, so the agents cannot read it.
+| | PR | Angle | Severity | What |
+| :- | :- | :- | :- | :- |
+| D11 | #12 Screen large transfers | data-integrity | high | an `await` between the funds check and the debit lets concurrent transfers overdraw |
+| D12 | #13 Cache the account list | data-integrity | medium | the cache is cleared by transfers and deposits only; opening, closing and interest leave it stale |
+| D13 | #14 Accrue interest hourly | correctness | high | the once-a-day guard compares a local day with a UTC day, so interest is credited every hour for part of each day |
+| D14 | #15 Idempotency keys | authz-and-attribution | high | keys are global, so one user's key returns another user's transfer |
+| D15 | #16 Owners' account webhooks | security | high | the server requests any URL a member supplies |
+| D16 | #17 Call the memo a note | migrations-and-rollout | medium | the new readers ignore the old key, so transfers written mid-rollout lose their memo |
+| D17 | #18 Round interest to the cent | correctness | medium | rounds to a hundredth of a cent, so balances stop being whole cents |
+| D18 | #19 Members can freeze an account | authz-and-attribution | high | the freeze webhook goes out before the ownership check |
+
+Two v2 PRs, #20 *Show each account's interest rate* and #21 *Webhooks: a delivery id*,
+are clean.
+
+Every planted defect is shown to bite on its branch before it enters the key.
+`verify/verify.mjs` does it, from a clone of the fixture:
+
+```
+node calibration/verify/verify.mjs ../adv-review-calibration            # every branch in the key
+node calibration/verify/verify.mjs ../adv-review-calibration feat/freeze-account
+```
+
+It checks out each branch, and its merge base with main, into temporary worktrees
+outside the clone, runs the branch's own code, and prints what each defect does. It
+lives here, not in the fixture, so the reviewing agents cannot read it.
 
 ## Run a pass
 
@@ -45,7 +75,7 @@ that does so is not part of the fixture, so the agents cannot read it.
 result where the scorer reads it. Clone the fixture, sign `gh` in to github.com, then:
 
 ```
-calibration/run.sh ../adv-review-calibration calibration/results/<version> 1 2 3 4 5 6 7 8 9 10 11
+calibration/run.sh ../adv-review-calibration calibration/results/<version> $(seq 1 21)
 ```
 
 `MODEL` picks the agents' model (default `sonnet`, which the published numbers use;
@@ -60,6 +90,7 @@ Results are kept per version under `results/`, so passes are comparable. Then:
 ```
 node calibration/score.mjs                # the newest results/<version>/
 node calibration/score.mjs --results calibration/results/0.2.0
+node calibration/score.mjs --set v2          # one set only
 node calibration/score.mjs --min-recall 0.7   # exit 1 below the bar, for CI
 node calibration/score.mjs --json         # the rows and the summary as JSON
 ```
