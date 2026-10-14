@@ -1,0 +1,188 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "e54bd9eabcfdc0e0ba5b6f946f16b6c1c2e31517",
+  "target": {
+    "prs": [
+      17
+    ]
+  },
+  "angles": [
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No route, server function, or job is added or changed (src/server.js's routes array and requireUser/requireRole guards are untouched). transfer() still records actorId: user.id exactly as before, and the new migration runs at store-open time, not behind any request path. Nothing in this diff could trip this angle."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface, redirect, CORS, secret, or third-party data flow is touched. src/webhooks.js and its documented 'nowhere else' outbound contract are untouched; the diff only renames an internal field and adds a pure in-memory migration function."
+    },
+    {
+      "title": "silent-drops",
+      "why": "Checked src/store.js: 'note' was added to SCHEMA.transfers in the same change that starts writing it (line 13), so insert()/pick() does not strip it on the way in - the write path is correctly additive and verified by a passing test. The one place a memo value can actually go missing is the new-key-without-fallback read in serialize.js/export.js, which is the same mechanism boundary-contract and migrations-and-rollout already cover below, not a separate schema-stripping or wrong-key-write defect."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR renames the stored transfer field from memo to note as step one of a two-step migration: migration 004 copies memo into note on every existing transfer while leaving memo in place, and src/transfers.js now writes both keys on every new transfer so previous-release code that still reads memo keeps working. The author states the externally-visible API field and CSV column both keep the name 'memo', but src/serialize.js's publicTransfer and src/export.js's row builder now source that value from the new note key instead of memo.",
+  "confirmed": [
+    {
+      "title": "Whole-file save by a stale process can erase committed transfers",
+      "file": "src/store.js",
+      "line": 68,
+      "category": "data-integrity",
+      "severity": "critical",
+      "rootCause": "Store.save() (src/store.js:68) writes the entire in-memory `this.data` to disk with no merge against the file's current contents, so a second long-running process against the same file can clobber the other's writes; this pre-existing defect is guaranteed to fire at the worst possible moment by the PR's own new migration 004, whose application triggers an automatic store.migrate()-driven save() on every new-release startup (src/store.js:118, invoked from src/server.js:156) -- squarely inside the two-copies-during-a-deploy window the PR's safety claims rely on.",
+      "summary": "Store.save() serializes the entire in-memory this.data with no merge against the file's current contents, and Store.load() is never re-run after process start, so a second long-running Store instance against the same file (which docs/deploy.md explicitly permits during a deploy) can overwrite and permanently lose writes made by the other instance.",
+      "failure": "With a stale pre-deploy process (P1) holding an in-memory snapshot of the ledger file from before migration 004 ran, and a freshly-started new-release process (P2) that runs store.migrate() (applying 004-transfer-note.js) at boot and then handles a new transfer, P2's save() correctly writes the new transfer, its balance effects, the bumped version (3->4), and the 'note' field to disk. If P1 then handles even one unrelated ordinary write (e.g. an admin deposit via POST /deposits, which calls store.update + store.save() per server.js:95-100) using its stale this.data, P1's save() overwrites the file wholesale with its own snapshot: the new transfer row, its balance debit/credit, the version bump, and the migrated 'note' field for pre-existing transfers are all silently erased from disk, with no error, lock conflict, or any other signal that data was lost.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 68,
+          "title": "Whole-file save by a stale process can erase committed transfers"
+        },
+        {
+          "file": "src/migrations/004-transfer-note.js",
+          "line": 1,
+          "title": "New migration's auto-save sits inside the exact unsafe window"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": true,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js in full: save() (line 68-73) writes this.data wholesale with no read-modify-merge, no lock, no version/ETag check; load() (line 59) is called exactly once, from Store.open() at startup, and never again -- confirmed via grep across src/ and test/ that '.load(' appears nowhere else. migrate() (line 105-120) calls save() automatically whenever any migration applied, including the PR's new 004-transfer-note.js, and src/server.js:155-156 invokes store.migrate(...) unconditionally on every process start. docs/deploy.md:7-8 explicitly documents 'Two copies can run against one file during a deploy' as the system's supported operating mode -- this file is untouched by the PR diff, so it's pre-existing architecture, not a contrived scenario. I wrote and ran a direct reproduction (two Store instances over one temp file, mirroring the claim's P1/P2 scenario: P1 opens first with a stale version-3 snapshot; P2 opens, runs migrate() applying 004, inserts a new transfer, updates a balance, and saves -- disk correctly shows version 4 with both transfers and the new balance; P1 then does one unrelated insert from its stale snapshot and saves). Result: P1's save reverted the file to version 3, dropped trf_new entirely, and reverted acc_1's balance to 100 -- exactly the data loss described. I also diffed src/store.js against the parent commit 7fc1c3c and confirmed save()/load()/migrate() are byte-identical, and verified no file locking, PID-based mutex, or any other cross-process guard exists anywhere in src/ (grepped for lock/flock/mutex/pid patterns -- the only pid usage is in the tmp-file name for the atomic rename, which prevents tmp-file collisions but does nothing to prevent the final rename from clobbering a concurrent writer's prior save). The claim is accurate, reproducible, and correctly scoped as pre-existing (not introduced by this diff) and merely triggered by the PR's new auto-saving migration sitting inside that pre-existing unsafe window.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "publicTransfer drops memo with no fallback to old key",
+      "file": "src/serialize.js",
+      "line": 26,
+      "category": "migration-rollback-safety",
+      "severity": "high",
+      "rootCause": "publicTransfer (src/serialize.js:26) and the CSV row builder (src/export.js:19) were switched to read only the new `note` key with no fallback to the legacy `memo` key, violating docs/deploy.md's own migration rule that a reader of a new key must fall back to the old one during the rollout window, so any transfer row written by a still-running previous-release copy (which has `memo` but not `note`) silently loses its memo text in both the API response and the CSV export.",
+      "summary": "publicTransfer (src/serialize.js:26) and the CSV row builder (src/export.js:19) read only t.note with no fallback to t.memo, which is unsafe given how Store.migrate() is gated: migration 004 is skipped once the store's recorded version reaches 4, even though it would otherwise backfill every row's note from memo. So this isn't about an already-running new-release process directly observing a sibling process's just-written row (it structurally cannot -- Store has no reload between requests, confirmed by execution); it's that once any new-release instance has bumped the on-disk version to 4, any transfer row written afterward by a still-running previous-release copy (memo set, note never set, since old code doesn't write note) is permanently unbackfillable, and the next new-release process to start (a restart, or another replica reading the same file) loads that row as-is and serves it with memo silently missing from the API response and blank in the CSV export, with no later migration run ever able to fix it short of a new migration version.",
+      "failure": "Seed a file at version 4 where all existing transfers have both memo and note (post first new-release migration). A previous-release copy, still running against the same file during the deploy window, inserts a transfer row { memo: 'rent', ...no note } and saves (old code never writes note). A new-release process then starts (or restarts) and loads this file: Store.migrate() sees mod.version (4) <= this.data.version (4) and skips migration 004 entirely, so the row is never backfilled. publicTransfer(row) returns { ..., memo: undefined, ... } (verified by direct execution), which JSON.stringify drops from the GET /accounts/:id/transfers response; export.js's csvCell(t.note) likewise renders an empty memo column in the CSV export. The memo text 'rent' is permanently unrecoverable through this field even though it still sits in the file under the old key.",
+      "sites": [
+        {
+          "file": "src/serialize.js",
+          "line": 26,
+          "title": "publicTransfer drops memo with no fallback to old key"
+        },
+        {
+          "file": "src/export.js",
+          "line": 19,
+          "title": "CSV export drops memo text under memo header"
+        },
+        {
+          "file": "src/serialize.js",
+          "line": 26,
+          "title": "Readers of memo/note drop the value with no fallback"
+        },
+        {
+          "file": "src/serialize.js",
+          "line": 26,
+          "title": "publicTransfer loses memo text for pre-note rows"
+        },
+        {
+          "file": "src/export.js",
+          "line": 19,
+          "title": "CSV export loses memo text for pre-note rows"
+        },
+        {
+          "file": "src/serialize.js",
+          "line": 26,
+          "title": "publicTransfer drops memo for legacy-shaped rows"
+        },
+        {
+          "file": "src/export.js",
+          "line": 19,
+          "title": "CSV export blanks memo for legacy-shaped rows"
+        }
+      ],
+      "foundBy": [
+        "migrations-and-rollout",
+        "boundary-contract",
+        "tests-that-dont-test",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "PLAUSIBLE",
+      "reasoning": "Checked out the PR head and read src/serialize.js, src/export.js, src/store.js, src/transfers.js, src/server.js, docs/deploy.md. Confirmed server.js always runs store.migrate() once at process startup, before serving any request, and Store has no per-request reload: a running process's in-memory store is fixed at its own startup snapshot, mutated only by its own request handlers. I wrote and ran a reproduction (Store.open -> migrate to v4; a separate Store instance simulating an old-release writer inserts a memo-only row and saves; the already-running NEW store's in-memory transfers list stays empty -- it never observes the sibling write). This refutes the claim's literal mechanism: an already-running new-release process reading a row 'a still-running previous-release copy' just wrote cannot happen, because that row is invisible to it until a restart, not merely memo-less. But continuing the repro, a second new-release instance (a restart, or another replica) that starts up AFTER that write does load the memo-only row -- and migrate() skips migration 004 entirely because mod.version (4) <= this.data.version (4), so the row is never backfilled. publicTransfer() on that row returned { ..., memo: undefined, ... } in my run, which JSON.stringify drops, matching the claimed API symptom; export.js's CSV builder has the identical no-fallback read and would emit a blank memo cell for the same row. So the underlying defect -- readers never fall back to the legacy key, contradicting docs/deploy.md rule 2 -- is real and reachable, just via a narrower path (a restart/second instance of the new release observing a legacy-shaped write made after the version counter was bumped) than the simple 'live concurrent GET' framing in the claim. No test in test/store.test.js or test/transfers.test.js exercises publicTransfer/exportTransfers against an unmigrated or post-version-bump legacy row, so nothing catches this.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "2 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/export.js:19 has the identical defect reported at serialize.js:26 \u2014 `t.note` read with no fallback to the old `memo` key \u2014 but in the CSV export path, and it is not named in the report. exportTransfers() builds each row as `[t.id, t.fromId, t.toId, t.amountCents, t.note, t.createdAt]`; for any transfer row written before migration 004 ran, or inserted concurrently by a previous-release process during the rollout window the PR's own description relies on ('copies of the previous release... keep working'), `t.note` is undefined and the CSV cell is silently empty. I reproduced this directly: a transfer row seeded with only `memo: 'rent (old row)'` (no `note`) produces the CSV data line `trf_old,acc_1,acc_2,100,,x` \u2014 header still says 'memo', amountCents and the other fields are intact, but the memo cell is blank. The existing CSV test ('an export lands under the export directory, named for the account only' in test/server.test.js) only asserts the header line equals 'id,fromId,toId,amountCents,memo,createdAt' and never asserts a data row's memo value, so this regression is untested and all 35 tests pass with the bug present.",
+      "why": "boundary-contract and data-integrity were run and did catch the near-identical bug in serialize.js (the API response), so this is not a subsystem no angle looked at in principle \u2014 but their write-up names only serialize.js, meaning the search stopped at the first instance and did not continue to the second hunk of the same diff that touches the same field under the same migration assumption. A CSV export is also a distinct, longer-lived consequence: it is a file handed to the account holder for bookkeeping, not a transient API response, so a silently blank historical memo in an exported ledger file persists long after the two-release rollout window closes. Because the only test exercising this code path checks the header row and not a data row, no test-driven angle would have surfaced it either."
+    }
+  ],
+  "counts": {
+    "raw": 9,
+    "rootCauses": 2,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 1,
+    "corrected": 2,
+    "downgraded": 0,
+    "preexisting": 1,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 14,
+    "scout": 1,
+    "finders": 5,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 6,
+    "critic": 1,
+    "retries": 0
+  }
+}

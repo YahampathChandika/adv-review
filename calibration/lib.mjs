@@ -57,6 +57,14 @@ export function score({ manifest, results, heads = {}, window = 5, sets = null }
       if (ref) wronglyRefuted.push({ id: d.id, foundBy: ref.foundBy ?? [], dismissedAsUnsure: ref.dismissedAsUnsure === true, reason: ref.reason ?? ref.why ?? null })
       else missed.push(d.id)
     }
+    // A missed defect the critic named among its gaps was seen but never verified.
+    // Gaps are free text, so the test is a mention of one of the defect's files:
+    // reported for a person to read, never counted as found.
+    const gaps = Array.isArray(result.missed) ? result.missed : []
+    const surfacedByCritic = missed.filter((id) => {
+      const files = defects.find((d) => d.id === id).sites.map((x) => x.file)
+      return gaps.some((g) => files.some((file) => `${g.what ?? ''} ${g.why ?? ''}`.includes(file)))
+    })
     const preexisting = []
     const known = []
     const adjudicatedTrue = []
@@ -96,6 +104,7 @@ export function score({ manifest, results, heads = {}, window = 5, sets = null }
       found,
       wronglyRefuted,
       missed,
+      surfacedByCritic,
       plantedMatched,
       preexisting,
       known,
@@ -119,6 +128,7 @@ function summarise(rows) {
     found: sum((r) => r.found.length),
     wronglyRefuted: sum((r) => r.wronglyRefuted.length),
     missed: sum((r) => r.missed.length),
+    surfacedByCritic: sum((r) => r.surfacedByCritic.length),
     confirmed: sum((r) => r.confirmedCount),
     plantedMatched: sum((r) => r.plantedMatched),
     preexisting: sum((r) => r.preexisting.length),
@@ -161,7 +171,7 @@ export function format({ rows, summary }) {
     if (r.planted.length) {
       const bits = [`found ${r.found.map((f) => `${f.id} by ${f.foundBy.join('+') || '?'}`).join(', ') || '—'}`]
       if (r.wronglyRefuted.length) bits.push(`WRONGLY REFUTED ${r.wronglyRefuted.map((w) => `${w.id}${w.dismissedAsUnsure ? ' (only for doubt)' : ''}`).join(', ')}`)
-      if (r.missed.length) bits.push(`MISSED ${r.missed.join(', ')}`)
+      if (r.missed.length) bits.push(`MISSED ${r.missed.map((id) => (r.surfacedByCritic.includes(id) ? `${id} (named by the critic, unverified)` : id)).join(', ')}`)
       out.push(`  planted ${r.planted.join(', ')} → ${bits.join('; ')}`)
     }
     if (r.unplanned.length) out.push(`  to adjudicate: ${r.unplanned.join(' | ')}`)
@@ -173,7 +183,7 @@ export function format({ rows, summary }) {
   const s = summary
   const judged = s.confirmed - s.preexisting
   out.push('')
-  out.push(`recall ${pct(s.recall)}: ${s.found} of ${s.planted} planted defects confirmed (${s.wronglyRefuted} found then wrongly refuted, ${s.missed} missed) across ${s.reviewed} PRs`)
+  out.push(`recall ${pct(s.recall)}: ${s.found} of ${s.planted} planted defects confirmed (${s.wronglyRefuted} found then wrongly refuted, ${s.missed} missed${s.surfacedByCritic ? `, ${s.surfacedByCritic} of them named by the critic` : ''}) across ${s.reviewed} PRs`)
   out.push(`precision ${pct(s.precision)}: ${judged - s.unplanned - s.adjudicatedFalse} of ${judged} confirmed findings true (${s.plantedMatched} on planted defects, ${s.known} known, ${s.adjudicatedTrue} adjudicated true); ${s.adjudicatedFalse} adjudicated false; ${s.unplanned} to adjudicate, counted false; ${s.preexisting} pre-existing left out`)
   const angles = Object.entries(s.byAngle)
   if (angles.length) out.push(`by angle: ${angles.map(([a, v]) => `${a} ${v.found}/${v.planted}`).join(', ')}`)

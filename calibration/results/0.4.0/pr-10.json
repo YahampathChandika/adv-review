@@ -1,0 +1,89 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "6040444b2e7da9774a98c28c7c8d15d73b175150",
+  "target": {
+    "prs": [
+      10
+    ]
+  },
+  "angles": [
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "silent-drops",
+      "why": "This diff writes nothing new to any store, queue, cache, or config \u2014 it only reads the existing `audit` collection and narrows the response shape. The only 'drop' is the serializer omitting actorId/target/id from the response, which is the PR's explicitly stated intent (and is itself asserted by the new test's Object.keys check), not an accidental loss of a value that should have round-tripped."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface (action strings are hardcoded enum values, never user input; account id is matched by exact equality, not interpolated into a query or shell), no secrets/tokens touched, no redirect, no CORS change, no third-party call added. The only security-relevant property here is authorization, which is already covered by authz-and-attribution \u2014 keeping both would just duplicate the same inspection."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No concurrent writes, cache, or retry logic is introduced or touched by this diff; the audit collection's unbounded growth is a pre-existing property of audit.js/store.js untouched by this change, not something this PR amplifies or newly introduces."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema or migration file is touched, the `audit` collection and its fields already existed before this PR, and the new route is purely additive (nothing is removed or renamed) so there is no old-code/new-data or new-code/old-data split to check."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds a read-only, owner-gated GET /accounts/:id/audit that unions the account's own audit entries with those of its transfers (matched by target id) and serializes only {action, at}, deliberately omitting who acted. No store writes, schema changes, or migrations are introduced \u2014 only a new route, a new serializer, a README row, and one test.",
+  "confirmed": [],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "GET /accounts/:id/audit (src/server.js) performs `store.all('audit').filter(...)` \u2014 a full, synchronous scan of the ENTIRE global audit collection (every account-open/close/deposit/transfer across all users, forever, unpruned) \u2014 just to find the handful of rows belonging to one account. Verified empirically: with 2M unrelated audit rows already in the store, one call for an account with a single relevant row took ~312ms of single-threaded blocking time. Since Node's HTTP server here is single-threaded and the route has no rate limiting (README's own 'Known limitations' already admits this), any ordinary signed-in owner can repeatedly call their own audit endpoint to stall the *entire* service for *every* user, with cost scaling with total platform history rather than anything the caller owns.",
+      "why": "authz-and-attribution confirms only who may call it and that the actor is hidden, not the cost of the computation; correctness confirms the filtered rows/shape are right, not their algorithmic cost; boundary-contract covers the request/response contract, not scan complexity; tests-that-dont-test checks whether the one test is tautological, not whether a near-empty test store could ever reveal a scaling problem (it can't). The data-integrity angle's own stated reasoning for exclusion addresses only concurrent writes/cache/retry and pre-existing unbounded growth as a store property \u2014 it never considers that this PR is the first thing to expose that unbounded growth as a per-request, owner-triggerable, synchronous full scan reachable over the network, which is new amplification, not an inherited property."
+    }
+  ],
+  "counts": {
+    "raw": 0,
+    "rootCauses": 0,
+    "merged": 0,
+    "confirmed": 0,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 6,
+    "scout": 1,
+    "finders": 4,
+    "triage": 0,
+    "sameSite": 0,
+    "skeptics": 0,
+    "critic": 1,
+    "retries": 0
+  }
+}

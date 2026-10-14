@@ -1,0 +1,148 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "88d0e534ac12020b2a6f616da97efb8b360d5676",
+  "target": {
+    "prs": [
+      4
+    ]
+  },
+  "angles": [
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "No new injection surface (no SQL/HTML/URL construction from input), no secrets/tokens touched or logged, no redirects, no CORS change, no third-party calls. The only new input, overdraftCents, is validated as a non-negative integer before it reaches any store call, and the new route reuses the existing bearer-token auth and the existing request-body size cap."
+    },
+    {
+      "title": "data-integrity",
+      "why": "This PR's base (branched from the baseline fixture commit, not from the sibling branch that added a read cache) has no cache, queue, or second store to go stale or disagree, and this diff adds none. The only concurrent-write shape (two updates touching one account) is the pre-existing transfer()/deposit() pattern, unchanged by this diff; nothing here adds unbounded growth or a new retry path."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds an admin-only POST /accounts/:id/overdraft endpoint that sets an account's overdraftCents limit, and changes transfer() to use canCover() (balance + overdraft) instead of balance alone when deciding if a transfer is covered. A new additive migration (003) backfills overdraftCents:0 on every existing account, and the field is added to the public account serialization.",
+  "confirmed": [
+    {
+      "title": "overdraftCents silently stripped by store's SCHEMA allowlist",
+      "file": "src/store.js",
+      "line": 12,
+      "category": "silent-drop",
+      "severity": "critical",
+      "rootCause": "SCHEMA.accounts in src/store.js was never updated to include 'overdraftCents', so pick() silently strips the field from every store.insert()/store.update() on accounts, making setOverdraft() (and the admin endpoint) a persistence no-op that the new test can't catch because it only checks HTTP status codes rather than reading back the stored value.",
+      "summary": "SCHEMA.accounts omits 'overdraftCents', so pick() strips it from every insert() and update(), meaning the overdraft limit an administrator sets is never actually persisted.",
+      "failure": "Admin calls POST /accounts/:id/overdraft {overdraftCents:500}; the handler returns 200 with body overdraftCents:0 (not 500), and store.get('accounts', id) afterward has no overdraftCents key at all. A later transfer that should be covered by the 500-cent overdraft (balance 0, amount 300) is refused with 409 'insufficient funds' because transfers.js's canCover() reads from.overdraftCents ?? 0 off a row that never carries the field. Verified live: ran openAccount -> POST /accounts/:id/overdraft -> store.get('accounts', id) -> POST /transfers against the PR's own test/helpers.js; the stored row had no overdraftCents property, the 200 response body showed overdraftCents:0, and the overdraft-covered transfer failed with 409. docs/deploy.md:18-20 states the project rule being violated: 'Add the key to SCHEMA in the same change that starts writing it.' The blind test at test/server.test.js:79-87 only asserts HTTP status codes (403/400/200) and never inspects the response body or re-reads the account, so it cannot catch this.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents silently stripped by store's SCHEMA allowlist"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents stripped by storage SCHEMA allowlist"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents is silently dropped by store.update/insert"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents missing from store SCHEMA, feature inert"
+        },
+        {
+          "file": "src/accounts.js",
+          "line": 59,
+          "title": "Overdraft limit silently never persists"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 146,
+          "title": "New overdraft test never checks the persisted value"
+        }
+      ],
+      "foundBy": [
+        "silent-drops",
+        "boundary-contract",
+        "tests-that-dont-test",
+        "migrations-and-rollout",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js:12 — SCHEMA.accounts is ['id','ownerId','label','currency','balanceCents','closedAt','createdAt','updatedAt'], missing 'overdraftCents'. pick() (store.js:18-24) copies only keys in SCHEMA, so both insert() and update() silently drop overdraftCents. Confirmed live: wrote and ran a repro script using the PR's own test/helpers.js (freshStore + serve) that (1) opened an account, (2) called POST /accounts/:id/overdraft {overdraftCents:500} as admin tok-ada — got HTTP 200 with response body overdraftCents:0, (3) read store.get('accounts', id) directly — the row had no overdraftCents key at all (hasOwnProperty returned false), (4) opened a second account and called POST /transfers for 300 cents from the zero-balance, 'overdraft-500' account — got HTTP 409 'insufficient funds', exactly as claimed. Also ran `node --test`: all 24 tests pass, confirming the existing blind test (test/server.test.js:146-157, asserting only 403/400/200) cannot catch this. Verified docs/deploy.md:18-20 states verbatim: 'Add the key to SCHEMA in the same change that starts writing it' — the violated rule the claim cites. The reason initial account creation appears to show overdraftCents:0 in responses is purely serialize.js's `a.overdraftCents ?? 0` fallback masking the absent field, not evidence of real persistence. All six cited sites (store.js:12 x4, accounts.js:59, server.test.js:146) check out exactly as described. This is a real, diff-introduced, critical defect that renders the entire feature a persistence no-op.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "README.md's 'Users and roles' capability table (line ~19-22) still says admin may do 'everything a member may, plus deposits into any account' — it was not updated to mention the new overdraft-setting privilege, even though the API route table and the Rules section a few lines below it were both updated for this PR. A reader who skims the roles table (the summary most people read first) comes away with an incomplete picture of what an admin can do, even though the detailed endpoint table and rules are accurate.",
+      "why": "None of the six angles target cross-section documentation consistency: silent-drops/correctness/authz-and-attribution look at runtime behavior, boundary-contract and tests-that-dont-test look at the API/input contract and test quality, and migrations-and-rollout looks at deploy safety. None of them diffs one piece of prose against another piece of prose in the same file for a stale summary."
+    }
+  ],
+  "counts": {
+    "raw": 6,
+    "rootCauses": 1,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 12,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  }
+}

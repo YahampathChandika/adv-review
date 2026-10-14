@@ -1,0 +1,315 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "1cac44578f11f347ba81a0079de446337b81b27d",
+  "target": {
+    "branch": "origin/feat/freeze-account",
+    "base": "origin/main"
+  },
+  "angles": [
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "Migration 004 is shaped identically to 002/003 (set a new column to a safe default when undefined), is purely additive with nothing removed, and every consumer (freezeAccount, transfer, unfreezeAccount) treats frozenAt undefined the same as null because both are falsy — verified by reading accounts.js/transfers.js. No two-phase rollout or removal step is involved."
+    },
+    {
+      "title": "security",
+      "why": "No new SQL/HTML/URL construction, secrets, redirects, or CORS surface is introduced; webhooks.js itself (signing, retry, the single-endpoint rule) is untouched. The one new externally-observable risk this diff creates — disclosing account id and requester id to the configured third-party endpoint before the request is known to be legitimate — is the same mechanism as, and fully covered by, the authz-and-attribution angle; reviewing it twice would just duplicate that finding."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This branch lets an owner self-freeze their own account (POST /accounts/:id/freeze) and an admin unfreeze it (POST /accounts/:id/unfreeze), threading a new frozenAt column through migration 004, the accounts SCHEMA, and transfer()'s existing closedAt-style guard, while firing an account.freeze-requested webhook so a card processor can react immediately. The freeze route's one piece of genuinely new control flow is calling notify() before the ownership/existence check runs — every other route in server.js calls notify only after store.save() succeeds.",
+  "confirmed": [
+    {
+      "title": "Freeze webhook fires before ownership check",
+      "file": "src/server.js",
+      "line": 115,
+      "category": "authz-and-attribution",
+      "severity": "critical",
+      "rootCause": "In POST /accounts/:id/freeze (src/server.js), notify('account.freeze-requested', ...) is called before freezeAccount() validates ownership/already-frozen state and before the mutation is durably saved via await store.save() — unlike every other route in the file, which notifies only after store.save() succeeds — so the webhook can fire for rejected requests (wrong owner, nonexistent or already-frozen account) or for a freeze that is lost to a save failure/crash, all fixed by the single reordering of notify to after a successful store.save().",
+      "summary": "POST /accounts/:id/freeze calls notify('account.freeze-requested', ...) before freezeAccount() performs its ownership/existence check, so the card-processor webhook fires for any authenticated member on any account id — including accounts they don't own and ids that don't exist — even though the request is ultimately rejected with 404.",
+      "failure": "Empirically reproduced: with webhook configured, member Cy (owns no account) calls POST /accounts/<Bob's real account id>/freeze and POST /accounts/does-not-exist/freeze. Both return 404 {error:'no such account'} and frozenAt is never set on any account, but in both cases the server already invoked notify('account.freeze-requested', {accountId, requestedBy: Cy's id}) at src/server.js:115, strictly before freezeAccount()'s ownership/existence check (src/accounts.js getOwnAccount) and before the already-frozen check and store.save() at line 117 -- confirmed by capturing the actual webhook payloads sent for both the wrong-owner and nonexistent-id cases.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before ownership check"
+        },
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before authorization check"
+        },
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before any validation"
+        },
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before ownership/state checks"
+        },
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before ownership or state is validated"
+        },
+        {
+          "file": "src/server.js",
+          "line": 117,
+          "title": "Freeze webhook can precede a failed/lost save"
+        }
+      ],
+      "foundBy": [
+        "authz-and-attribution",
+        "boundary-contract",
+        "data-integrity",
+        "tests-that-dont-test",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js: the freeze route (lines 110-120) calls notify('account.freeze-requested', ...) at line 115 before freezeAccount() is called at line 116, and freezeAccount() (src/accounts.js:69-75) performs the ownership check via getOwnAccount (which 404s on wrong owner or nonexistent id) and the already-frozen check, both after notify has already fired. store.save() happens at line 117, after both notify and the mutation. Confirmed webhooks.js's notify() is fire-and-forget (returns synchronously, delivery happens in a detached async chain with up to 3 attempts, no cancellation API). Confirmed every other notifying route in server.js (account.closed, transfer.created, deposit.created) calls notify only after store.save() succeeds -- freeze is the only route that inverts this order, matching the PR's own comment ('Tell the card processor first'). Ran a live instrumented probe (serve() from test/helpers.js, a stub webhook.send capturing payloads) reproducing the exact scenario: member Cy POSTs /accounts/<Bob's id>/freeze and /accounts/does-not-exist/freeze. Both returned 404 {error:'no such account'}, store.get('accounts', id).frozenAt stayed undefined (mutation never reached), yet both calls produced a captured account.freeze-requested webhook payload (accountId + requestedBy: Cy's id) before any rejection. Verified test/server.test.js:132 only asserts the 404 status for the non-owner case and never inspects webhook delivery, so the existing test suite does not catch this. Verified via git show that the entire freeze route, including this ordering, is newly introduced by this commit (not pre-existing code). Also confirmed docs/security.md:8-9 states 'A request is authorised before its first observable effect: ... and any webhook' and docs/security.md:3-4 requires any deliberate rule break to edit that file in the same PR; this diff's stat shows docs/security.md is not touched. All 6 reported sites describe facets of this same single confirmed defect (ownership/existence/already-frozen bypassed before notify, and notify preceding a possibly-failed save) and all hold up under direct testing.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Freeze status never surfaces in any API response",
+      "file": "src/serialize.js",
+      "line": 9,
+      "category": "silent-drop",
+      "severity": "high",
+      "rootCause": "publicAccount() in src/serialize.js was never updated to expose the new frozenAt column (no analogous `frozen` boolean the way `closed` maps from closedAt), so no API response, including the freeze/unfreeze endpoints' own 200 bodies and GET /accounts/:id, ever reveals whether an account is frozen.",
+      "summary": "publicAccount() omits frozenAt/frozen entirely, so the store correctly records that an account is frozen but no HTTP response — including the freeze call's own 200 and every later GET — ever says so.",
+      "failure": "A member calls POST /accounts/:id/freeze; the server sets frozenAt on the stored row and returns 200 with a body containing no frozen/frozenAt key (verified by direct execution: body was {id, label, currency, balanceCents, closed:false, createdAt} with store row frozenAt non-null). Every subsequent GET /accounts/:id returns the identical shape. A client has no way to confirm the freeze took effect from the API, and a frozen account is indistinguishable from an open one in every response, though transfers on it will fail with 409.",
+      "sites": [
+        {
+          "file": "src/serialize.js",
+          "line": 9,
+          "title": "Freeze status never surfaces in any API response"
+        },
+        {
+          "file": "src/serialize.js",
+          "line": 9,
+          "title": "publicAccount never exposes frozen status"
+        },
+        {
+          "file": "src/serialize.js",
+          "line": 9,
+          "title": "Public account shape never reveals frozen status"
+        }
+      ],
+      "foundBy": [
+        "silent-drops",
+        "boundary-contract",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/serialize.js: publicAccount() returns only {id, label, currency, balanceCents, closed, createdAt} — no frozen/frozenAt key, unlike closed which derives from closedAt. Read src/accounts.js: freezeAccount/unfreezeAccount correctly set/clear frozenAt on the stored row. Read src/transfers.js:22: transfers correctly block on frozenAt. Read src/server.js: both the freeze route (110-118) and unfreeze route (121-128) return publicAccount(...), so their own 200 bodies and any later GET /accounts/:id go through the same serializer and never carry frozen status. Empirically verified by running a live instance via test/helpers.js: POST /accounts/:id/freeze returned 200 with body {id,label,currency,balanceCents,closed:false,createdAt} (no frozen field), a following GET returned the byte-identical shape, while store.get('accounts', id) directly showed frozenAt set to a timestamp. Ran the full test suite (npm test) — all 35 tests pass with this gap present; the existing freeze test (test/server.test.js) only asserts status codes, and the one test that pins the exact key set via Object.keys(a.body).sort() is on the account-open route, not freeze/unfreeze, so nothing catches the omission. Confirmed via grep that the diff never touches src/serialize.js, and frozenAt is new to this branch (added via migration 004 and the accounts schema in src/store.js), so there was nothing analogous to omit before this diff — the gap is newly introduced by adding the feature without a corresponding serializer update. The claim's description, failure scenario, and 'introduced by this diff' attribution all hold exactly as stated across all three cited sites (they are the same single site restated three ways).",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "deposit() never checks an account's frozenAt",
+      "file": "src/transfers.js",
+      "line": 47,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "deposit() in src/transfers.js:47 checks only account.closedAt and has no account.frozenAt guard, so an admin deposit still credits a frozen account's balance, violating the 'no transfers in or out while frozen' invariant.",
+      "summary": "deposit() only guards on account.closedAt; it has no frozenAt check, so money can still be credited into a frozen account, contradicting the branch's own stated guarantee that a frozen account accepts no transfers 'in or out'.",
+      "failure": "POST /accounts/:id/freeze (as the owning member) returns 200 and sets frozenAt; a subsequent POST /deposits (as admin) with that accountId succeeds with 201 and credits the balance, despite the account being frozen — verified by running the flow end-to-end against the real server.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 47,
+          "title": "deposit() never checks an account's frozenAt"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 47,
+          "title": "Deposits still land in a frozen account"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js: deposit() (line 47 in the branch) checks only `if (account.closedAt) throw ...` with no frozenAt check, while transfer() in the same file was updated with `if (from.frozenAt || to.frozenAt) throw new HttpError(409, 'a frozen account cannot transfer')`. Confirmed the diff only touches transfer(), not deposit() (git diff shows the added hunk is only inside transfer(), @@ -19,6 +19,7 @@). Traced the HTTP route layer in src/server.js: POST /deposits is requireRole('admin') and calls deposit(store, user, body) directly with no additional frozen check anywhere in the route or in requireRole/requireUser (src/auth.js only checks role/ownership, not account state). Reproduced the exact claimed flow against the real HTTP server (test/helpers.js freshStore+serve): member opens an account, POST /accounts/:id/freeze -> 200 (frozenAt set), then admin POST /deposits {accountId, amountCents:500} -> 201 with balanceCents incremented from 0 to 500. This exactly matches the claimed failure. frozenAt is a new column introduced by this diff (migration 004), so deposit() never had this guard before and the omission is introduced by this diff, not pre-existing.",
+      "verifiedBy": [
+        "refute:p3.1",
+        "refute:p3.2",
+        "refute:p3.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Unfreeze never tells the card processor",
+      "file": "src/server.js",
+      "line": 124,
+      "category": "data-integrity",
+      "severity": "high",
+      "rootCause": "POST /accounts/:id/unfreeze (src/server.js:121-129) destructures only { store, user, params } and never calls notify, so the card processor that was told account.freeze-requested is never informed when the account is later unfrozen.",
+      "summary": "POST /accounts/:id/unfreeze (src/server.js:121-129) destructures only { store, user, params } and never calls notify, so the card processor that was told account.freeze-requested is never informed the account was unfrozen -- the ledger and the external system of record permanently disagree after every single unfreeze, with no event, retry or reconciliation to ever correct it.",
+      "failure": "Admin calls POST /accounts/:id/unfreeze after a member froze the account; the call returns 200 and frozenAt is cleared in the ledger (transfers immediately allowed again per transfers.js:22), but no webhook of any kind is sent, so an external card processor that blocked the card on account.freeze-requested is never told to unblock it.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 124,
+          "title": "Unfreeze never tells the card processor"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js:121-129: the POST /accounts/:id/unfreeze route handler destructures only { store, user, params } from ctx and never references notify, unlike every other mutating route (freeze, close, transfer, deposit) which all call notify(...) after store.save(). Empirically verified with a fake webhook sender wired through serve(store, dir, { webhook: { send: fakeSend } }): freezing an account produced one 'account.freeze-requested' webhook call; the subsequent admin unfreeze call returned 200 (frozenAt cleared, confirmed via store state) and produced zero additional webhook calls (call count stayed at 1). There is no other job, reconciliation loop, or webhook emission path for unfreeze anywhere in the codebase (webhooks.js only exposes notify/idle, invoked solely from server.js route handlers). The divergence is deterministic, not race-dependent: it fires on every successful unfreeze.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    },
+    {
+      "title": "Daily interest still accrues on a frozen account",
+      "file": "src/interest.js",
+      "line": 27,
+      "category": "boundary-contract",
+      "severity": "medium",
+      "rootCause": "accrueInterest() in src/interest.js:27 skips only accounts with closedAt set and has no frozenAt check, so the daily interest job keeps crediting a frozen account's balance — a separate omission from the deposit() guard, in a different function/file.",
+      "summary": "accrueInterest() only skips accounts with closedAt set; it does not check frozenAt, so the daily interest job keeps crediting a frozen account's balance, again contradicting the 'no transfers (in or out) while frozen' guarantee the freeze feature is meant to provide.",
+      "failure": "accrueInterest(store) credits interest to an account whose frozenAt is set, growing its balance while frozen, contradicting the feature's 'no transfers in or out while frozen' guarantee; reproduced with a $10,000 balance at 20% APR yielding +547 cents on a frozen account in one run.",
+      "sites": [
+        {
+          "file": "src/interest.js",
+          "line": 27,
+          "title": "Daily interest still accrues on a frozen account"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/interest.js:22-36: accrueInterest's loop body is `if (account.closedAt) continue` with no frozenAt check, then unconditionally applies dailyInterest to balanceCents. Reproduced directly: opened an account, deposited $10,000, set interestRateBps to 2000 (20%), froze it via freezeAccount (confirmed frozenAt set), then called accrueInterest(store) directly -- it returned { accounts: 1, cents: 547 } and the account's balanceCents rose from 1,000,000 to 1,000,547 while frozenAt remained set throughout. No test in test/interest.test.js exercises a frozen account (only closedAt is tested), and no other guard in the codebase calls accrueInterest with a frozen-account filter -- scripts/run-jobs.mjs invokes it directly once a day with no human actor to catch the discrepancy.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    },
+    {
+      "title": "freezeAccount/closeAccount ignore each other's state",
+      "file": "src/accounts.js",
+      "line": 69,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "freezeAccount() and closeAccount() in src/accounts.js don't check each other's status field (freezeAccount ignores closedAt, closeAccount ignores frozenAt), so an already-closed account can be frozen and an owner can close an account out from under an active freeze, bypassing the admin-only unfreeze control.",
+      "summary": "freezeAccount() never checks account.closedAt (unlike setInterestRate(), which does, at src/accounts.js:62) and closeAccount() never checks account.frozenAt, so an already-closed account can be 'frozen' and, conversely, an owner can unilaterally close an account out from under an active freeze, bypassing the administrator-only unfreeze control the feature is built around.",
+      "failure": "Owner can close an account while it is frozen (closeAccount ignores frozenAt) and can freeze an account that is already closed (freezeAccount ignores closedAt); an admin can then successfully call unfreeze on the closed account, clearing frozenAt with no observable gate on closedAt anywhere in the freeze/unfreeze path.",
+      "sites": [
+        {
+          "file": "src/accounts.js",
+          "line": 69,
+          "title": "freezeAccount/closeAccount ignore each other's state"
+        }
+      ],
+      "foundBy": [
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/accounts.js: freezeAccount (line 69) checks only account.frozenAt via getOwnAccount + the frozen guard, never account.closedAt; closeAccount (line 46) checks only account.closedAt and balanceCents, never account.frozenAt. Verified both directions end-to-end through the HTTP routes with the owner's own token: (a) close account A (200) then freeze it (200) -- freeze succeeds on an already-closed account; (b) freeze account B (200) then close it (200) -- close succeeds while frozen, and a subsequent admin unfreeze call on the now-closed account also returns 200 and silently clears frozenAt (confirmed via direct store inspection: frozenAt went from a timestamp to null while closedAt stayed set throughout). This lets an owner's own close action unilaterally terminate an account an admin-only freeze was meant to hold, and lets a closed account be (re)frozen, exactly as described.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The diff violates docs/security.md's own 'Authorisation first... before any write, any file, any log line about the resource, and any webhook' rule (lines 8-9), and that file's preamble explicitly requires a PR that breaks a rule to say so and amend this file in the same change -- this diff does neither. README.md:54 is also left stale: it still describes webhooks as firing only for deposits/transfers/closed-accounts, 'after the response', which is no longer true for the freeze event this diff adds.",
+      "why": "All six angles (and the two ruled-out ones) evaluate code behavior against the spec/commit messages; none of them cross-checks the diff against the project's own written policy files, which are data/contract artifacts no runtime-behavior lens reads."
+    },
+    {
+      "what": "No test anywhere exercises the freeze webhook against a live/mock endpoint. test/server.test.js:79 is the only test that configures a real webhook.url and asserts the list of fired events (line 104: ['deposit.created','transfer.created','account.closed']) -- it was not extended for freeze/unfreeze. The new freeze test (test/server.test.js:136) calls serve(store, dir) with no webhook option, so createNotifier takes its no-URL branch and notify() is a no-op (webhooks.js:12). Verified by running npm test (35/35 pass) and reading both call sites.",
+      "why": "tests-that-dont-test was run against this diff's new test in isolation (does it assert the right statuses?), not cross-referenced against the pre-existing webhook-integration test it should have extended -- that connection across two different test files is outside what a single-diff-focused angle would compare."
+    },
+    {
+      "what": "The feature's sole safety value depends on best-effort webhook delivery (webhooks.js, confirmed untouched): two retries over ~6s, then only a console.warn with no return value consumed by notify()'s fire-and-forget call, and no field anywhere (on the account or in the audit log) recording whether the processor was ever actually told. A frozen account whose webhook ultimately fails looks identical, in every API response and in the database, to one that succeeded.",
+      "why": "The security angle explicitly scoped webhooks.js out as unchanged infrastructure and folded the one new risk it saw (disclosure) into authz-and-attribution; that scoping reasoning addresses who can see the data sent, not whether the new safety-critical reliance on old best-effort delivery semantics is adequate -- a question only visible by asking what the feature's stated purpose now depends on, not by diffing the webhook code itself."
+    }
+  ],
+  "counts": {
+    "raw": 14,
+    "rootCauses": 6,
+    "merged": 0,
+    "confirmed": 6,
+    "plausible": 0,
+    "corrected": 6,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 19,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 10,
+    "critic": 1,
+    "retries": 0
+  }
+}

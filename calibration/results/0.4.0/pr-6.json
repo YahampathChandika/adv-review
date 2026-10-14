@@ -1,0 +1,179 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "5d9e288679769335a688cda4db28d8b2a64b4675",
+  "target": {
+    "prs": [
+      6
+    ]
+  },
+  "angles": [
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "impersonation target scope",
+      "source": "scout"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "boundary-contract",
+      "why": "The only changed call shape is transfers.js's transfer() receiving a different second argument (owner instead of user) from one new call site in server.js; transfer()'s destructuring of body (fromId/toId/amountCents/memo) and every other existing caller (test/transfers.test.js calling transfer(store, member, ...) directly) are untouched, and I traced them. The one real disagreement this introduces -- transfer()'s single `user` param being overloaded for both ownership-authorization and audit-attribution -- is already covered under authz-and-attribution and silent-drops, so a separate boundary-contract pass over this small diff has nothing further to find."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface (userId is only compared with === inside store.get/.find), no secrets, no redirects/SSRF, and no new third-party or cross-origin call is introduced by this diff. The one authorization boundary it adds -- who may set onBehalfOf, and the 403-before-404 ordering that avoids leaking user existence to non-admins -- is exactly what authz-and-attribution already covers; a separate security pass would re-walk the same two lines in server.js/auth.js."
+    },
+    {
+      "title": "data-integrity",
+      "why": "transfer() itself is untouched by this diff: same synchronous in-memory read-modify-write (two store.update calls, one store.insert, one store.save()), same single-process/single-file model as before. No caching, retries, queues, or unbounded collections are introduced or touched, so there is no new concurrency or invalidation surface."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No file under src/migrations/ changes, SCHEMA in store.js is untouched, and no new field is persisted -- onBehalfOf is read once in server.js and never stored anywhere. Old and new server code read and write the exact same collections and shapes, so there is no rollout-order or backfill question this diff can raise."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR adds an optional `onBehalfOf: <userId>` field to POST /transfers so an admin can move money between a member's own accounts. A new `actingFor()` helper in auth.js checks the caller is an admin (else 403) and the target user exists (else 404), and server.js swaps the user passed into the existing `transfer()` function for that target before running the usual ownership/balance checks.",
+  "confirmed": [
+    {
+      "title": "On-behalf-of transfers are audited under the member, not the admin",
+      "file": "src/transfers.js",
+      "line": 34,
+      "category": "authz-and-attribution",
+      "severity": "high",
+      "rootCause": "transfer() and record() are only ever given the 'owner' (the impersonated member resolved by actingFor), never the real authenticated caller, so an admin's on-behalf-of transfer stores actorId and writes the audit log entry as the member's id, erasing all trace that an admin performed it (and the new test added for this path checks only HTTP status/balance, never actorId or the audit entries, so it cannot catch this).",
+      "summary": "When an admin performs a transfer with onBehalfOf, the stored transfer row's actorId and the audit log entry both name the impersonated member rather than the admin who actually authenticated and made the request, contradicting audit.js's own doc comment and the README's 'every write is audited under the user who made it' rule.",
+      "failure": "In src/server.js:84-87, POST /transfers computes `owner = actingFor(store, user, body.onBehalfOf)` (the impersonated member) and calls `transfer(store, owner, body)`, so inside transfer() the parameter named `user` is bound to the member, not the admin. src/transfers.js:34 then writes `actorId: user.id` into the stored transfer row, and transfers.js:37 calls `record(store, user.id, 'transfer', row.id)` \u2014 both using the member's id. I verified this by driving the exact scenario the PR's own test uses (admin Ada calling POST /transfers with onBehalfOf: Bob's id, moving Bob's own money between his two accounts): the resulting transfer row has actorId equal to Bob's (the member's) id, and entriesFor(store, row.id) returns an audit entry with actorId also equal to Bob's id \u2014 nowhere does Ada's id appear. So if Bob later disputes the transfer ('I never authorized moving my money'), the ledger's own audit trail falsely corroborates that he personally did it; there is no record that admin Ada (who took the phone call and actually performed the write) is the one who acted. This directly contradicts audit.js's doc comment ('actorId is the signed-in user for a request... never a person who did not do it' \u2014 here it names a person, the member, who did not act) and the README's explicit rule ('Every write is audited under the user who made it'). It also breaks the existing precedent in the same file: deposit() correctly records record(store, admin.id, 'deposit', accountId) \u2014 the acting admin's own id \u2014 even though the deposit lands in someone else's account; the new onBehalfOf path collapses the authorization subject (whose ownership/balance to check) and the attribution subject (who gets blamed for the write) into the same `user` object, so impersonating the member for authorization purposes also impersonates them for audit purposes. The PR's own new test (test/server.test.js:61-77) never inspects actorId or the audit entries, so it is blind to this and passed unchanged; `npm test` is green with the defect present.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 34,
+          "title": "On-behalf-of transfers are audited under the member, not the admin"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 34,
+          "title": "Admin identity dropped from transfer/audit records"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 34,
+          "title": "On-behalf-of transfer is recorded as the member's own act"
+        },
+        {
+          "file": "src/server.js",
+          "line": 83,
+          "title": "On-behalf-of transfer is attributed to the member, not the admin"
+        }
+      ],
+      "foundBy": [
+        "authz-and-attribution",
+        "silent-drops",
+        "correctness",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js:80-88, src/transfers.js:1-39, src/auth.js:37-43, src/audit.js:1-14, and README.md:47. Confirmed statically that owner = actingFor(store, user, body.onBehalfOf) resolves to the impersonated member, and transfer(store, owner, body) binds that member to the parameter named `user` inside transfer(), which is then used for both `actorId: user.id` (transfers.js:34) and record(store, user.id, 'transfer', row.id) (transfers.js:37). Then empirically reproduced the PR's own scenario (admin Ada, token tok-ada, calling POST /transfers with onBehalfOf: Bob's id, moving Bob's own money between his two accounts) via a script using the real test helpers: the resulting stored transfer row had actorId === member.id (Bob), and entriesFor(store, rowId) returned an audit entry with actorId === member.id as well; admin.id (Ada) appeared nowhere in either record. Also confirmed the contrasting precedent: deposit() in the same file correctly calls record(store, admin.id, 'deposit', accountId), using the acting admin's own id even though the deposit lands in someone else's account -- so the onBehalfOf path is an inconsistent regression, not an established pattern. Confirmed audit.js's doc comment ('actorId is the signed-in user for a request... never a person who did not do it') and README.md's 'Every write is audited under the user who made it' rule, both of which this violates. Confirmed via the diff that the new test (test/server.test.js:61-77) asserts only HTTP status codes and balanceCents, never actorId or audit entries, so it does not catch this. This is a real, diff-introduced defect exactly as described.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "actingFor lets an admin impersonate any user, not just members",
+      "file": "src/auth.js",
+      "line": 38,
+      "category": "access-control",
+      "severity": "high",
+      "rootCause": "actingFor(store, user, userId) in auth.js checks only that the caller is an admin and never checks the looked-up target's role, so an admin can pass onBehalfOf set to any user id \u2014 including another admin's \u2014 and act as them, not just as a 'member' as the feature is specified to do.",
+      "summary": "actingFor(store, user, userId) only checks that the caller is an admin; it never checks the role of the looked-up `other` record, so an admin can set onBehalfOf to any user id in the store \u2014 including another admin's \u2014 and the transfer runs as that target, not just as a 'member' the way the README and the PR's stated intent describe.",
+      "failure": "An admin can set onBehalfOf to the id of ANY existing user \u2014 not just a 'member' \u2014 including another admin, and the transfer runs fully as that target: POST /transfers as admin Ada with { fromId: <Zed's account>, toId: <Zed's other account>, amountCents, onBehalfOf: <Zed's id> } (Zed also role 'admin') returns 201, moves real balances between Zed's own accounts, and records actorId = Zed's id in both the transfers row and the audit row \u2014 concealing that Ada, not Zed, performed the write. This is because actingFor() (src/auth.js:38-43) checks only the caller's role (must be admin) and never checks the looked-up target (other) user's role at all.",
+      "sites": [
+        {
+          "file": "src/auth.js",
+          "line": 38,
+          "title": "actingFor lets an admin impersonate any user, not just members"
+        }
+      ],
+      "foundBy": [
+        "impersonation target scope"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/auth.js's actingFor: it checks only `user.role !== 'admin'` on the caller and then does `store.get('users', userId)` with no check of `other.role`. Read src/server.js:83 (the /transfers route) and src/transfers.js's transfer(): neither adds any role check on the resolved `owner`. Then ran the actual scenario against the checked-out PR code (not a reimplementation): seeded two admin users (Ada, Zed) via the real Store/migrations, started the real HTTP server, had Zed open two accounts and receive a deposit, then had Ada (using her own admin token) POST /transfers with onBehalfOf: zed.id. Result: HTTP 201, Zed's balances moved 500/0 -> 200/300, and both the persisted `transfers` row and the `audit` row show actorId equal to Zed's user id (the impersonated admin), not Ada's (the actual caller). This exactly matches the claimed failure mechanics and outcome. The only new test in test/server.test.js seeds a single admin and a single member and never constructs a second-admin target, so it provides no coverage against this and does not contradict the finding.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "README.md:38's `/transfers` row updates only the \"Does\" cell to mention `onBehalfOf`; the \"Who\" cell still reads \"owner of both\" verbatim. That table is the single documented access-control contract for the API, and it now understates who may call the route \u2014 a reader (or a future PR adding a similar authorization rule elsewhere) skimming the \"Who\" column alone would never learn a second, more-privileged caller class exists for this endpoint.",
+      "why": "Every angle that ran (authz-and-attribution, tests-that-dont-test, silent-drops, impersonation-target-scope, correctness) and every angle ruled out (boundary-contract, security, data-integrity, migrations-and-rollout) is scoped to the runtime code path or its tests \u2014 none of them treats the README's access table as a contract surface to check for accuracy against the code it just changed."
+    },
+    {
+      "what": "The on-behalf-of mechanism was added only to `POST /transfers`. The three routes a support rep would need to confirm the result for the same member \u2014 `GET /accounts/:id` (balance), `GET /accounts/:id/transfers` (history), `POST /accounts/:id/export` \u2014 still call `getOwnAccount(store, user, id)` with the real authenticated caller (src/server.js:58-61, 71-78, 99-106), so an admin who just moved money on a member's behalf gets a 404 trying to check that member's resulting balance or history. This directly undercuts the PR's own stated scenario (\"over the phone\"), where the rep plausibly needs to confirm the balance to the caller.",
+      "why": "This is a completeness gap in the read half of the API relative to the feature's own motivating use case, not a question of who is authorized to write (authz-and-attribution), what the transfer logic does (correctness/boundary-contract), or who can be impersonated (impersonation-target-scope) \u2014 those all stop at the one changed call site in server.js's POST /transfers handler and never look at the sibling GET/export routes the feature's premise depends on."
+    },
+    {
+      "what": "`publicTransfer` (src/serialize.js:20-29) and the CSV written by `exportTransfers` (src/export.js:17-19) carry no field distinguishing an admin-initiated on-behalf-of transfer from one the member made themselves \u2014 by design `actorId` is never exposed (asserted at test/server.test.js:33, \"the actor stays inside\"). Before this PR that hidden field was always the caller's own id anyway, so its absence was moot; after this PR, a member's own transfer history/export can now silently contain rows a different person caused, with no marker anywhere the member (or anyone they show the export to) could ever see.",
+      "why": "This is a new, emergent consequence of the PR for the read/reporting subsystem (export.js, serialize.js, the GET history route) \u2014 files the diff never touches and that none of the write-side angles (authz-and-attribution, silent-drops, impersonation-target-scope) were positioned to inspect, since their reported findings both anchor on auth.js/transfers.js, not on what a member downstream actually sees."
+    }
+  ],
+  "counts": {
+    "raw": 5,
+    "rootCauses": 2,
+    "merged": 0,
+    "confirmed": 2,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 14,
+    "scout": 1,
+    "finders": 5,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 6,
+    "critic": 1,
+    "retries": 0
+  }
+}

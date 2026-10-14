@@ -1,0 +1,88 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "7c94983ac3a95ac4c09e363853073eff1cf9c196",
+  "target": {
+    "prs": [
+      20
+    ]
+  },
+  "angles": [
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "public-shape consistency across list vs single-item reads",
+      "source": "scout"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file is touched by this diff. Migration 003 (backfilling interestRateBps to 0) and the SCHEMA entry for it were added in a prior commit (7fc1c3c), not this PR. The serializer's `a.interestRateBps ?? 0` already covers any row that predates that migration, so there is no new schema change, no new column drop, and no new deploy-order hazard introduced here."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "No route, guard, or identity-derivation logic changes. GET /accounts/:id still runs through requireUser + getOwnAccount (ownerId === user.id check, unchanged); POST .../interest-rate still runs through requireRole('admin'), unchanged. The diff only adds a field to the response body of routes whose authorization was already in place and is not touched here."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface, no secret/token handling, no redirect/CORS/SSRF code, and no new third-party data flow. interestRateBps is a non-secret account attribute the PR explicitly intends members to see on their own accounts (and it was already readable in full via the admin-only POST .../interest-rate response, so no new information is reachable by a new audience)."
+    },
+    {
+      "title": "silent-drops",
+      "why": "This diff writes nothing new — interestRateBps was already stored by openAccount/setInterestRate and kept by store.pick() under the existing SCHEMA entry (src/store.js) before this PR. The change is purely read-side (serialize.js exposes an already-persisted field). I manually verified round-trip: set rate via POST, then read via GET /accounts/:id — the exact value comes back, including through a cache entry warmed before the write (tested directly in this worktree, not just via the PR's own test)."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds `interestRateBps` to the public account shape in src/serialize.js (publicAccount), so every endpoint that returns an account — GET /accounts, GET /accounts/:id, POST /accounts, POST /accounts/:id/close, POST /deposits, POST /accounts/:id/interest-rate — now includes the rate. Updates README's endpoint table and the HTTP round-trip test's expected key set, and adds one assertion that a member reads back, via GET /accounts/:id, the rate an administrator just set through the existing admin-only route.",
+  "confirmed": [],
+  "refuted": [],
+  "unverified": [],
+  "missed": [],
+  "counts": {
+    "raw": 0,
+    "rootCauses": 0,
+    "merged": 0,
+    "confirmed": 0,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 7,
+    "scout": 1,
+    "finders": 5,
+    "triage": 0,
+    "sameSite": 0,
+    "skeptics": 0,
+    "critic": 1,
+    "retries": 0
+  }
+}

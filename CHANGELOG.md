@@ -16,6 +16,14 @@
   reports each set and takes `--set`.
 - `calibration/verify/verify.mjs` shows every planted defect biting on its branch, from
   a clone of the fixture.
+- The scorer marks a missed defect that the critic named among its gaps: seen, never
+  verified, still a miss.
+- `calibration/run.sh` takes `branch:<ref>` targets, and now stops each session it
+  starts. It used to stop the shell around the session instead, so every review session
+  of a pass kept running after it finished.
+- Calibrated (candidate): on v1, 9 of 10 planted defects confirmed and 15 of 15 findings
+  true; on v2, 8 of 8 and 18 of 18; no findings on the four clean PRs. The one miss, D3,
+  was named by the critic but not verified. See `calibration/README.md`.
 
 ## 0.3.0 — 2026-10-14
 

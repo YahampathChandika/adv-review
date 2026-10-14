@@ -1,0 +1,127 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "ec38b7f4818c2cd7a7aee111ab72a7bfe1d786e7",
+  "target": {
+    "prs": [
+      3
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "No new injection, secret handling, redirect, or CORS surface: the diff only reshapes a function signature and an internal call site that already passed server-derived values (user.id); the request body still never reaches ownerId in the current route."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No concurrency, cache, or multi-store write path is touched; store.insert/update and the audit write are unchanged mechanically, only which values are passed in."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration or schema file is touched (checked src/migrations and store.js SCHEMA), and this is a single-deployable service with no mixed old/new call path across a rollout boundary."
+    },
+    {
+      "title": "silent-drops",
+      "why": "Checked store.js SCHEMA: 'accounts' already lists ownerId and 'audit' already lists actorId: both fields this diff writes are read back under the same keys they used before the diff, via listAccounts/getOwnAccount and entriesFor; no key is renamed or newly introduced on only one side."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "openAccount's signature changes from a single options object (ownerId, actorId both explicit) to (store, actor, {label, currency, ownerId = actor.id}), deriving actorId from the positional actor and defaulting ownerId to it; the POST /accounts route and every test call site are updated to match, and the PR claims this is a pure refactor with no behaviour change. The route also switches from spreading the request body into the call (`{...body, ownerId, actorId}`) to picking only label/currency off it directly.",
+  "confirmed": [
+    {
+      "title": "POST /accounts 500s on a null JSON body",
+      "file": "src/server.js",
+      "line": 52,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "In the POST /accounts handler (src/server.js:52), the refactor replaced `{ ...body, ownerId: user.id, actorId: user.id }` with direct property access `{ label: body.label, currency: body.currency }`; since spreading `null` safely yields `{}` but reading a property off `null` throws, a request whose JSON body is the literal `null` (which readJson returns verbatim, not `{}`) now crashes with an uncaught TypeError (500) instead of the previous clean 400 'label is required', and no existing or added test sends such a body to catch the regression.",
+      "summary": "Changing the POST /accounts handler from spreading `body` into the options object to accessing `body.label`/`body.currency` directly means a request whose JSON body is the literal `null` now crashes with an uncaught TypeError (500) instead of the clean 400 'label is required' it produced before this diff.",
+      "failure": "POST /accounts with a valid Bearer token and a JSON body that is the literal `null` (e.g. curl -d 'null' or fetch with JSON.stringify(null)) throws an uncaught TypeError reading body.label off null, which createServer's catch-all turns into a 500 {\"error\":\"internal error\"} plus a logged stack trace, where the pre-diff code returned a clean 400 {\"error\":\"label is required\"}. No test sends such a body.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 52,
+          "title": "POST /accounts 500s on a null JSON body"
+        },
+        {
+          "file": "src/server.js",
+          "line": 52,
+          "title": "Null JSON body crashes POST /accounts"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js: readJson (lines 22-36) returns {} only when the body is byte-empty (chunks.length === 0); a literal JSON `null` body has one chunk, parses via JSON.parse('null') to the JS value null, and is passed through unchanged. The PR's POST /accounts handler (line 52) does `{ label: body.label, currency: body.currency }`, which throws TypeError on body === null before openAccount is reached. That error isn't an HttpError, so createServer's catch (lines 122-127) falls to the generic 500 branch. I reproduced this end-to-end: built a repro script using test/helpers.js's real `serve()` and `freshStore()`, POSTed to /accounts with Authorization: Bearer tok-bob and body literally `null`. On the PR head commit (ec38b7f) this returned status 500 with body {error:'internal error'} and logged a TypeError stack trace referencing server.js:52. I then checked out the pre-diff base commit (89da56f, confirmed via `git show 89da56f:src/server.js` to contain the old `{ ...body, ownerId: user.id, actorId: user.id }` construction), reran the identical repro, and got status 400 with body {error:'label is required'} -- matching the documented fact that spreading null/undefined into an object literal is a no-op in JS (verified separately: `{...null}` -> `{}`). I also grepped test/server.test.js and test/accounts.test.js for any existing null-body test and found none -- the only malformed-body test sends the unparsable string '{' (line 56 of test/server.test.js), which is a different code path (JSON.parse failure -> HttpError 400 'body must be JSON'), not a valid-JSON-null body. The claim's mechanism, reachability (any authenticated POST /accounts with body null), observable effect (500 instead of 400, plus a spurious error-log entry), and introduced-by-this-diff attribution are all exactly as described and I could not refute any part of it.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "scripts/seed.mjs (documented in README.md as the project's quickstart second command) still calls openAccount(store, { ownerId, label, actorId }) in the pre-refactor convention and was never updated by this PR. Since openAccount(store, actor, {...}) now requires a third argument that seed.mjs never passes, every invocation throws `TypeError: Cannot destructure property 'label' of 'undefined' as it is undefined` immediately. Reproduced directly: `LEDGER_FILE=/tmp/x.json node scripts/seed.mjs` crashes with that exact error. This directly contradicts the PR's own claim that every caller was updated.",
+      "why": "All four reviewed angles (correctness, boundary-contract, authz-and-attribution, tests-that-dont-test) worked from the diff plus 'the files around every hunk' — src/accounts.js, src/server.js, and the two test files the diff touches. scripts/seed.mjs is untouched by the diff and sits outside src/ and test/, so nothing pointed a diff-scoped reviewer at it. npm test (22/22 passing) never exercises it, and `npm run check` is only `node --check` (a syntax check), which cannot catch a runtime destructuring error — so the repo's own CI-equivalent commands give false confidence."
+    },
+    {
+      "what": "main has already diverged from this PR's merge-base (89da56f) with commit 7fc1c3c ('Interest, webhooks and a read cache'), which adds test/cache.test.js and test/interest.test.js — four more call sites using the old openAccount(store, { ownerId, label, actorId }) convention — and also edits src/accounts.js itself (adding `interestRateBps: 0` to the inserted row). `git merge-tree 89da56f ec38b7f4818c2cd7a7aee111ab72a7bfe1d786e7 7fc1c3c` shows this merges with no conflict markers at all (the two commits' edits land on disjoint lines of accounts.js), so merging this PR into main would compile cleanly and then crash both new test files at runtime — the same `Cannot destructure property 'label' of 'undefined'` error, just surfacing later and silently.",
+      "why": "This requires knowing about a sibling commit that exists on main but is absent from both sides of the diff under review (the PR's branch and its merge-base) — no angle scoped to reading this diff and its immediate hunks has any path to that commit, and a textual merge auto-resolves without flagging a conflict, so even running `git merge` would not visibly warn anyone before the test suite was run post-merge."
+    }
+  ],
+  "counts": {
+    "raw": 2,
+    "rootCauses": 1,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 8,
+    "scout": 1,
+    "finders": 4,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 1,
+    "critic": 1,
+    "retries": 0
+  }
+}

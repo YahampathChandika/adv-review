@@ -1,0 +1,189 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "016008ca54a8acd3cc007b6c6c0ce2344685b86b",
+  "target": {
+    "prs": [
+      9
+    ]
+  },
+  "angles": [
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No route is added or changed in auth-relevant terms: POST /accounts is still wrapped by the same requireUser, and ownerId/actorId are still derived from the server-side `user.id`, never from the request body, both before and after this diff."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface, secret, redirect, CORS policy, or third-party data flow is touched - this diff is an internal field rename plus a migration; nothing in it changes what untrusted input can reach."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Renames the stored account field from `label` to `name` across accounts.js, serialize.js, server.js and store.js's SCHEMA, keeping the HTTP wire contract (`label` in request/response bodies) unchanged via translation at the server.js and serialize.js boundaries. Adds migration 003 which copies `label` to `name` and deletes `label` in the same step, for every existing account.",
+  "confirmed": [
+    {
+      "title": "seed.mjs still calls openAccount with label",
+      "file": "scripts/seed.mjs",
+      "line": 26,
+      "category": "boundary-contract",
+      "severity": "high",
+      "rootCause": "openAccount's parameter was renamed from `label` to `name` in src/accounts.js, but scripts/seed.mjs (a documented entry point) was never updated and still passes `label`, so seeding now fails with 'label is required'.",
+      "summary": "openAccount's parameter was renamed from `label` to `name`, but scripts/seed.mjs \u2014 a documented entry point (README.md line 9) \u2014 was never updated and still calls it with `label`.",
+      "failure": "Running `node scripts/seed.mjs` (as README.md instructs for setting up a dev/demo ledger) now throws an uncaught `HttpError: label is required` and exits with status 1 on every run, because `openAccount(store, { ownerId, label: 'Everyday', actorId })` leaves the destructured `name` parameter undefined, tripping the `!name` validation. Verified by running `LEDGER_FILE=/tmp/x node scripts/seed.mjs` directly: it crashes before creating any account. Line 27 (the 'Savings' account) has the same bug. No test in the diff exercises this script, so nothing caught it.",
+      "sites": [
+        {
+          "file": "scripts/seed.mjs",
+          "line": 26,
+          "title": "seed.mjs still calls openAccount with label"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/accounts.js: openAccount now destructures {ownerId, name, currency='AUD', actorId} and validates !name (throwing with message 'label is required'). Read scripts/seed.mjs lines 26-27: still calls openAccount(store, { ownerId: member.id, label: 'Everyday', actorId: member.id }) and label: 'Savings' \u2014 unchanged, still using the old key. Confirmed scripts/seed.mjs was last touched in the pre-PR baseline commit (89da56f), so this diff is what broke it. Ran `LEDGER_FILE=/tmp/x node scripts/seed.mjs` in the worktree: it throws an uncaught HttpError: label is required at accounts.js:9, from scripts/seed.mjs:26, process exits with code 1, before any account or the deposit/save steps execute. README.md line 9 documents `node scripts/seed.mjs` as the way to seed an admin/member/two accounts. Grepped test/ for any reference to seed.mjs \u2014 none exists, so nothing in the test suite would catch this. The claim's description, severity, site, and introduced-by-diff attribution all match exactly what I observed; nothing to correct.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "Destructive migration races a stale concurrent save, losing data",
+      "file": "src/migrations/003-account-name.js",
+      "line": 6,
+      "category": "data-integrity",
+      "severity": "medium",
+      "rootCause": "Migration 003 adds `name` and deletes `label` in the same step instead of splitting the rename into an additive migration followed by a later removal migration, violating docs/deploy.md's rollout contract and \u2014 combined with Store's whole-file overwrite on save() and load-once-at-startup \u2014 risking an old-code process clobbering the migration's work (or new data) during a rolling deploy.",
+      "summary": "Migration 003 combining `add name` and `delete label` in one step is a real, diff-introduced violation of docs/deploy.md's documented 'additive first, remove later' convention (a genuine contract/process violation independent of this finding). However, the catastrophic consequence attributed to that specific structural choice -- an old-code process's stale save silently reverting the migration and erasing concurrently-created rows (e.g. a new account) during a rolling deploy -- is NOT caused by migration 003 being destructive rather than split, and is NOT introduced by this diff. It is an unconditional, pre-existing property of Store (whole-file overwrite in save(), single load-at-startup, zero cross-process concurrency control) that reproduces identically with a hypothetical purely-additive version of migration 003, and reproduces identically using only the already-shipped, purely-additive migration 002 with no PR changes involved at all. Splitting migration 003 into additive-then-remove, as the claim implies would fix this, would not prevent the described data loss.",
+      "failure": "An old-code process holding a stale in-memory snapshot (loaded once at startup, before a concurrent new-code process ran a migration) will, on its own next store.save(), overwrite the entire file with its stale `this.data` -- reverting the migration's version/shape changes and silently discarding any rows (e.g. a brand-new account) written by any other process in the interim, with no error surfaced anywhere. This is real and I reproduced it exactly as described using the PR's actual migration 003. But it is reproducible identically (same reversion, same silent loss of a concurrently-created row) using a purely additive rewrite of migration 003, and reproducible identically using only the pre-existing, already-shipped, purely-additive migration 002 with none of this PR's changes present -- proving the failure is a pre-existing, diff-independent property of Store's whole-file-overwrite/load-once design, not a consequence of migration 003 combining an add and a delete in one step.",
+      "sites": [
+        {
+          "file": "src/migrations/003-account-name.js",
+          "line": 6,
+          "title": "Destructive migration races a stale concurrent save, losing data"
+        },
+        {
+          "file": "src/migrations/003-account-name.js",
+          "line": 6,
+          "title": "Migration 003 renames and deletes in one step"
+        },
+        {
+          "file": "src/migrations/003-account-name.js",
+          "line": 3,
+          "title": "Migration 003 combines add and remove in one step"
+        }
+      ],
+      "foundBy": [
+        "data-integrity",
+        "migrations-and-rollout",
+        "boundary-contract"
+      ],
+      "preexisting": true,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read docs/deploy.md (confirms the documented 'additive first / readers tolerate both shapes / deploy then remove' contract exists verbatim), src/store.js (confirms Store.load() runs once in Store.open(), save() does JSON.stringify(this.data) of the WHOLE in-memory document on every call, and migrate() also ends with a whole-file save() -- none of this mechanics changed by the PR, only the SCHEMA array's field name changed), and src/migrations/003-account-name.js (confirms it does add `name` and `delete account.label` in one `up()`). I then reproduced the claimed failure three ways by actually running the real code: (1) literally as described: seeded a file at version 2 with an old-schema account, loaded it with the pre-PR (git show 89da56f) store.js as a stand-in for a still-running old-code process, then separately loaded+migrated it with the PR's store.js+migrations (new process), had the new process insert a brand-new account and save, then had the old process (holding its stale pre-migration this.data) update a field and save -- the file reverted to version 2, the new account vanished, and the old account's `label` field (with a stale balance) reappeared. This exactly matches the claimed failure. (2) I then rewrote migration 003 to be purely additive (adds `name`, keeps `label`, no delete) and re-ran the identical race -- the EXACT SAME catastrophic loss occurred (version reverted, new account vanished). (3) I then ran the identical race using ONLY the pre-existing, pre-PR baseline code and its already-shipped, purely-additive migration 002 (untouched by this diff) -- again the exact same catastrophic loss occurred. (2) and (3) prove the catastrophic clobbering is a pre-existing property of Store's architecture (whole-file overwrite on every save(), one load at startup, no cross-process version check or locking) that exists identically whether a migration is destructive or purely additive, and existed before this PR ever touched the codebase. So while the specific failure described is real and I could not refute its occurrence, the causal attribution is wrong: it is not migration 003's combining of add+delete in one step that creates or heightens this risk, and splitting it into an additive-first migration followed by a later removal migration (the fix implied by the claim and by docs/deploy.md's stated convention) would NOT have prevented the catastrophic loss -- the identical loss happens with an additive-only version of the same migration, and with the already-shipped migration 002. The convention in docs/deploy.md is aimed at preventing an old-code reader/writer from silently losing track of a field's value across the overlap window (via SCHEMA key-dropping in pick()), not at preventing whole-file last-writer-wins clobbering between two concurrent processes, which the codebase never guards against at all, migration or no migration.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true,
+      "severityFrom": "critical"
+    }
+  ],
+  "refuted": [
+    {
+      "title": "Migration 003 sets name to undefined for label-less rows",
+      "file": "src/migrations/003-account-name.js",
+      "line": 5,
+      "category": "correctness",
+      "severity": "low",
+      "rootCause": "Migration 003's up() sets `account.name = account.label` unconditionally, so an account row that never had `label` ends up with an explicit `name: undefined` own property rather than no `name` key at all, and the test covering exactly that row never asserts the outcome.",
+      "summary": "For an account row that never had a `label` field at all, migration 003's `up()` explicitly sets `account.name = undefined` (an own property with value undefined) instead of leaving the account without a `name` key, and the test exercising exactly this row never checks the outcome.",
+      "failure": "Confirmed by running the real migration chain: given `{ id: 'b', ownerId: 'u', currency: 'NZD' }` (no `label`), after `store.migrate(MIGRATIONS)` the stored row becomes `{ id: 'b', ownerId: 'u', currency: 'NZD', name: undefined }` -- `'name' in row` is `true` and `Object.keys(row)` includes `name`. Piping this through `publicAccount()` (src/serialize.js:12) yields `label: undefined`, and because `res.end(JSON.stringify(payload))` in src/server.js drops undefined-valued keys, a client reading that account back over HTTP gets a response with no `label` key at all -- silently violating the PR's own stated contract that 'requests and responses must still use label'. test/store.test.js's 'migration 002 gives every account a currency...' test (lines 34-44) pushes exactly this row (`{ id: 'b', ownerId: 'u', currency: 'NZD' }`, no label) through the full migration chain including the new 003-account-name.js, but asserts `name`/`label` outcomes only for the other row ('a'); row 'b' is never checked, so this behavior passes silently either way. In the current codebase this state can only arise from hand-edited/legacy ledger.json data or a future insert path that bypasses `openAccount`'s required-label validation (store.insert has no such requirement), since `openAccount` itself always requires a non-empty label -- so it is not reachable through the app's own account-creation flow today, but migrations exist precisely to handle such legacy/irregular data, and this one mishandles it. The safer behavior (matching migration 002's own pattern of only writing a value when one applies) would be to only move/delete the key when `label` was actually present, e.g. `if ('label' in account) { if (account.name === undefined) account.name = account.label; delete account.label }`.",
+      "sites": [
+        {
+          "file": "src/migrations/003-account-name.js",
+          "line": 5,
+          "title": "Migration 003 sets name to undefined for label-less rows"
+        }
+      ],
+      "foundBy": [
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "why": "Reproduced the exact scenario by running the real Store.migrate() on a row {id:'b', ownerId:'u', currency:'NZD'} with no label. Confirmed the factual premise: account.name does become an own property set to undefined ('name' in b === true, Object.keys includes 'name'), and the store.test.js migration test never asserts anything about row 'b'. However, the claimed downstream consequences do not hold: (1) JSON.stringify(b) and JSON.stringify(store.data) (the actual disk-write path, since migrate() calls store.save() automatically) both drop the undefined-valued key entirely, so nothing abnormal is ever persisted; (2) pick('accounts', row), used by every insert/update, already filters out keys whose value is undefined (row[key] !== undefined check), so it treats an explicit `name: undefined` identically to an absent key; (3) simulating publicAccount + JSON.stringify for the HTTP response path produces a payload with no `label` key at all -- but this is identical to what the pre-PR code would have produced for the same hand-edited legacy row (label: a.label -> undefined -> dropped by JSON.stringify), since openAccount has always required a non-empty label/name and a label-less row could only arise from legacy/hand-edited data either way. The diff does not change any externally observable behavior (disk contents or HTTP response) versus what already existed; it only changes which field name transiently held `undefined` in memory for one tick before the next JSON.stringify call (to disk or over HTTP) erases the distinction. Full test suite (22/22) passes and no other code path does a presence/hasOwnProperty-style check on account rows. This is handled downstream and produces no observable outcome, so per the review criteria it is refuted as a correctness defect (at most a cosmetic style nit about not mirroring migration 002's 'only write when present' pattern).",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "dismissedAsUnsure": false
+    }
+  ],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The repo documents a mandatory two-step rollout for any field removal \u2014 docs/deploy.md: 'Two copies can run against one file during a deploy... Migrations are additive first... Removing a key is its own later migration, shipped once no running copy reads it... Deploy, then remove.' Migration 003 violates this outright: it renames label -> name AND deletes the old key in the same migration, shipped in the very release that also removes 'label' from src/store.js SCHEMA and stops every reader (accounts.js, serialize.js) from understanding it. I verified the concrete consequence directly: with the new SCHEMA/pick() in place (simulating a new-code instance that already migrated the file) but an old-code writer still calling store.insert with the pre-rename shape ({ label: 'Everyday', ... }, no 'name' key \u2014 exactly what the unpatched src/server.js + src/accounts.js on any not-yet-redeployed instance would do), the resulting stored row has NEITHER 'label' NOR 'name' \u2014 store.js's own pick() silently drops the unlisted 'label' key and nothing ever set 'name', so the account is permanently nameless with no error anywhere. This is exactly the two-copies-during-a-deploy scenario docs/deploy.md was written to prevent, and it is a distinct, more severe failure mode (silent, permanent data loss on write, not just a transient read inconsistency) than the already-reported 'migration races a stale concurrent save' finding, which is about a single process's save timing, not about the documented multi-version rollout window at all.",
+      "why": "All six angles that ran (migrations-and-rollout included) analyzed the diff's own migration logic and in-process timing; none of them cross-referenced docs/deploy.md, a file the diff never touches and that sits outside 'what the changed line touches'. The authz/security angles were explicitly scoped away from this change, and none of the angles are framed to check a code change against the repository's own written operational contract for a different part of the system (deployment/rollout), which is precisely the kind of cross-subsystem consequence the diff itself doesn't reveal \u2014 it only shows up by reading a doc nobody edited and then empirically reproducing what an old binary would do against the new schema."
+    }
+  ],
+  "counts": {
+    "raw": 5,
+    "rootCauses": 3,
+    "merged": 0,
+    "confirmed": 2,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 1,
+    "preexisting": 1,
+    "refuted": 1,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 17,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "sameSite": 1,
+    "skeptics": 7,
+    "critic": 1,
+    "retries": 0
+  }
+}

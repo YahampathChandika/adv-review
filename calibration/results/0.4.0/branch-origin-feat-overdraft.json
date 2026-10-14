@@ -1,0 +1,145 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "88d0e534ac12020b2a6f616da97efb8b360d5676",
+  "target": {
+    "branch": "origin/feat/overdraft",
+    "base": "origin/main"
+  },
+  "angles": [
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "The single new entry point (POST /accounts/:id/overdraft) is wrapped in requireRole('admin'), which runs before setOverdraft has any observable effect, and identity comes from the server-side bearer-token lookup in auth.js, not from client-supplied data. record(store, admin.id, 'account.overdraft', accountId) attributes the write to the authenticated admin, matching the existing deposit() pattern exactly (admin can act on any account, no ownership check, same as deposit). No new identity- or ownership-derivation logic was introduced for this to get wrong."
+    },
+    {
+      "title": "security",
+      "why": "No new injection surface (no string interpolation into queries/HTML/URLs), no secrets or tokens touched, no outbound third-party calls, no redirects or CORS changes. The only new input (overdraftCents) is validated with Number.isInteger and a lower bound before use."
+    },
+    {
+      "title": "data-integrity",
+      "why": "setOverdraft is a single synchronous store.update() call with no await between the read (store.get) and the write (store.update), so there is no interleaving window for a concurrent request to race it — the same single-threaded, single-JSON-file model already used by closeAccount/deposit, unchanged by this diff. No new cache, no multi-store write, no retry path."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "Migration 003 only adds a default (account.overdraftCents = 0 when undefined), checked with an undefined guard so re-running it is a no-op; it removes nothing and renames nothing, and migrations apply in ascending version order with no gap (1, 2, 3). The actual defect this branch has (see boundary-contract/silent-drops) lives in Store's SCHEMA/pick contract, not in migration sequencing or additive/rollback semantics, so a migration-ordering-focused pass over this diff has nothing new to find."
+    },
+    {
+      "title": "correctness",
+      "why": "canCover's comparison (balanceCents + (overdraftCents ?? 0) >= amountCents) is a straightforward, correctly-inverted generalization of the prior check (NOT(balance < amount) == balance >= amount) and reduces to the old behavior exactly when overdraftCents is 0; setOverdraft's validation (Number.isInteger, >=0, 404 on missing account, 409 on closed) mirrors existing sibling functions. No off-by-one, no unawaited promise, no early return skipping cleanup. Any way this logic could misbehave routes through what data it is given, which is the boundary-contract/silent-drops angle, not a fresh correctness bug in this comparison or validation itself."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The branch adds an admin-only route (POST /accounts/:id/overdraft) that sets a per-account overdraftCents limit, changes transfer's funds check from balanceCents>=amount to a new canCover() helper (balance+overdraft>=amount), and adds migration 003 to backfill overdraftCents=0 onto every existing account. It touches src/accounts.js, src/transfers.js, src/serialize.js, src/server.js, a new migration file, and matching tests in server/store/transfers test files.",
+  "confirmed": [
+    {
+      "title": "overdraftCents is dropped by store's SCHEMA allowlist",
+      "file": "src/store.js",
+      "line": 12,
+      "category": "boundary-contract",
+      "severity": "critical",
+      "rootCause": "src/store.js's SCHEMA.accounts was never extended with 'overdraftCents', so pick() silently strips that field on every store.insert/store.update (openAccount and setOverdraft included), making the overdraft limit feature a complete no-op even though the HTTP endpoint returns 200/publicAccount echoes the value back — and the only new test for the endpoint (test/server.test.js, 'only an administrator sets an overdraft limit') checks only HTTP status codes, never the response body or a re-fetched account, so it is blind to exactly this silent drop.",
+      "summary": "SCHEMA.accounts was not updated to include 'overdraftCents', so every store.insert/store.update write of that key (from openAccount and setOverdraft) is silently stripped by pick(), making the entire overdraft feature a no-op while the API still reports success.",
+      "failure": "POST /accounts/:id/overdraft with {overdraftCents: 500} as an administrator returns HTTP 200 and (per publicAccount) reports overdraftCents: 0 (a false-success response), the raw stored account row never gains an overdraftCents key, and any later transfer against that account is evaluated by canCover() with overdraftCents defaulting to 0 — so the overdraft limit can never actually cover a transfer. Verified by direct reproduction against the real Store/openAccount/setOverdraft/publicAccount/canCover code in the checked-out branch, and by running the existing test suite (which passes unchanged because its only overdraft test checks status codes alone).",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents is dropped by store's SCHEMA allowlist"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents is stripped by store.update/insert, feature is a no-op"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Overdraft limit silently discarded by store's field allowlist"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "New admin test never checks the persisted/returned overdraft value"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 86,
+          "title": "overdraft test only checks HTTP status, not the value"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract",
+        "silent-drops",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js: SCHEMA.accounts (line 12) is ['id','ownerId','label','currency','balanceCents','closedAt','createdAt','updatedAt'] — no 'overdraftCents'. pick() (lines 18-24) only copies keys present in SCHEMA, used by both insert() and update(). Read src/accounts.js: openAccount (line 18) inserts overdraftCents:0, and setOverdraft (line 59) calls store.update('accounts', accountId, {overdraftCents, updatedAt: now()}) — both go through pick() and both get the key stripped. Confirmed src/store.js is NOT touched anywhere in the diff (grep for 'diff --git ... store.js' only matches test/store.test.js), so this is a pure omission in a brand-new feature, not a preexisting condition. Wrote and ran a direct repro script against the real Store/openAccount/setOverdraft/publicAccount in the checked-out worktree: after openAccount the raw stored row has no overdraftCents key; after setOverdraft(..., {overdraftCents:500}) the raw row, and setOverdraft's own return value, both still have no overdraftCents key; publicAccount(returned) renders overdraftCents: 0 despite the admin having set 500. Also confirmed canCover() in transfers.js (line 9) reads `from.overdraftCents ?? 0`, so it always sees 0 regardless of any limit set — no transfer can ever be covered by an overdraft. Ran the full test/server.test.js suite: all 5 tests pass, including 'only an administrator sets an overdraft limit', which (read at lines 79-90) asserts only HTTP status codes (403/400/200) and never inspects the response body or re-fetches the account — exactly as claimed, it is blind to the silent drop. Every cited site matches what I found in the actual files at those line numbers. This is as close to a fully mechanically verified finding as this review format allows.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The branch's own migration (src/migrations/003-overdraft.js, version 3) silently collides with a migration of the same version number that already landed on origin/main in a sibling commit (src/migrations/003-interest-rate.js, also version 3, from 'Interest, webhooks and a read cache', 7fc1c3c). feat/overdraft (88d0e53) and origin/main (7fc1c3c) are siblings off the same base (89da56f) — neither is an ancestor of the other, confirmed with `git merge-base --is-ancestor` both ways. I simulated Store.migrate()'s actual loop against both migration files together: files sort alphabetically as 003-interest-rate.js then 003-overdraft.js; the first one to run sets `data.version = 3`, and the loop's `if (mod.version <= this.data.version) continue` then permanently skips 003-overdraft.js forever (not just once) — verified by running the real migration code (node) against a pre-existing account at version 2: only `003-interest-rate.js` ends up in `applied`, and the account never gets `overdraftCents` backfilled. This directly falsifies the branch's own commit message, which calls the migration 'additive/non-breaking' and says it 'backfills every existing account with a limit of 0.' I also ran `git merge-tree` between origin/main and this commit: it produces real, visible conflicts in src/accounts.js, src/server.js, and two test files (both branches insert a sibling field at the same line, e.g. `balanceCents: 0,` followed by either `overdraftCents: 0,` or `interestRateBps: 0,`) — but src/store.js and the two migrations/003-*.js files merge with NO conflict at all. That silence is the hazard: whoever resolves the loud conflicts in accounts.js/server.js has no git signal pointing them at store.js's SCHEMA array (where this branch already forgot to add overdraftCents, the already-flagged bug) or at the migrations directory (where a second, same-numbered migration now permanently shadows this one). None of the ruled-out angles would surface this: migrations-and-rollout explicitly reasoned about this diff's migration numbering in isolation ('applies in ascending order, 1,2,3, no gap') and never checked whether version 3 was already claimed on the actual integration target: origin/main.",
+      "why": "boundary-contract, silent-drops, tests-that-dont-test, and the five ruled-out angles (authz-and-attribution, security, data-integrity, migrations-and-rollout, correctness) all reasoned about this diff as a closed, self-consistent unit applied on top of its stated base. None of them checked whether the branch's base actually matches origin/main's current tip, which is exactly where this defect lives — it exists only in the relationship between this branch and a sibling branch on main that none of the angles had any reason to open. A diff-only review of 88d0e53 cannot see 003-interest-rate.js at all, since that file doesn't exist on either side of the diff; it only appears by separately walking origin/main's history and testing the merge, which is an integration check rather than a per-file-defect check."
+    },
+    {
+      "what": "setOverdraft(store, admin, { accountId, overdraftCents }) never compares the new limit against the account's current balanceCents. An administrator can lower (or set to 0) the overdraft limit on an account whose balance is already negative beyond the new limit (e.g. balance -500 under a 500 limit, then the limit is dropped to 100), putting the account into a state where `balanceCents < -overdraftCents` — a breach of the very invariant canCover is meant to enforce — with no detection, no audit flag distinguishing a breach-inducing change from a routine one, and no remediation path besides the account organically receiving deposits or incoming transfers (which canCover does not gate). The account silently becomes send-frozen (every future transfer out fails canCover) with nothing in the system surfacing that it is in this state. No test in the diff exercises reducing an existing limit below an account's outstanding usage.",
+      "why": "The ruled-out correctness angle explicitly limited its scope to canCover's comparison operator and setOverdraft's input validation bounds, and waved off any deeper state-transition concern by asserting it 'routes through what data it is given, which is the boundary-contract/silent-drops angle' — but boundary-contract examines input edge values (0, negative, missing account, closed account), not a cross-call invariant between two independent writes (a transfer that drove balance negative, and a later, unrelated setOverdraft call that shrinks the floor under it). Silent-drops looked for fields dropped by the store layer, not for a business invariant nothing re-validates. Data-integrity ruled out only concurrent-write races, not a sequential, single-threaded state transition that is itself invalid. No angle's stated scope actually covers a later admin action invalidating an earlier, already-settled transfer's precondition."
+    }
+  ],
+  "counts": {
+    "raw": 5,
+    "rootCauses": 1,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 9,
+    "scout": 1,
+    "finders": 3,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  }
+}

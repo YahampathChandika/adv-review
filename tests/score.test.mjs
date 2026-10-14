@@ -162,3 +162,17 @@ test('results are summarised per set as well as overall, and a set can be scored
   assert.equal(v2.summary.recall, 1)
   assert.doesNotMatch(format(v2), /^set /m, 'one set: no per-set lines')
 })
+
+test('a missed defect the critic named is reported as such, and still counts as missed', () => {
+  const results = [{ pr: 1, result: { confirmed: [finding('src/a.js', 40)], missed: [{ what: 'src/c.js still calls the old signature', why: 'outside the diff' }] } }]
+  const { rows, summary } = score({ manifest, results })
+  assert.deepEqual(rows[0].missed, ['D2'])
+  assert.deepEqual(rows[0].surfacedByCritic, ['D2'], 'D2 has a site in src/c.js')
+  assert.equal(summary.recall, 0.5)
+  assert.equal(summary.surfacedByCritic, 1)
+  const text = format({ rows, summary })
+  assert.match(text, /MISSED D2 \(named by the critic, unverified\)/)
+  assert.match(text, /1 missed, 1 of them named by the critic\)/)
+  const unnamed = score({ manifest, results: [{ pr: 1, result: { confirmed: [], missed: [{ what: 'something in src/zz.js', why: 'x' }] } }] })
+  assert.deepEqual(unnamed.rows[0].surfacedByCritic, [])
+})

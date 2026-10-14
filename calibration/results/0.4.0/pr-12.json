@@ -1,0 +1,170 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "d8caf340eef7f0f44c72f131d3f6f4b042ef6810",
+  "target": {
+    "prs": [
+      12
+    ]
+  },
+  "angles": [
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file, SCHEMA entry, or persisted row shape changes in this diff. The screen is a runtime-only dependency, not stored data, and the repo's own docs say it's one process per ledger file, so there's no old/new-code-vs-data skew to check here."
+    },
+    {
+      "title": "silent-drops",
+      "why": "No new field is written to any store row by this diff (the transfer row's keys are unchanged). The screen's verdict is read once (verdict.allow) and never persisted, so there's no writer/reader-name mismatch or schema-stripped key to find."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "The only entry point touched (POST /transfers) still goes through the unchanged requireUser wrapper, and the screen is given the server-derived user.id, fromId, toId it already validated against ownership \u2014 no new entry point, no new trust decision, and the audited actor (user.id) is unchanged. Nothing here re-derives identity differently or lets a client assert who acted."
+    },
+    {
+      "title": "security",
+      "why": "No secrets, string-built queries/HTML/URLs, redirects, or CORS changes appear in this diff, and the actual fraud-service HTTP client isn't part of it (screen is dependency-injected and defaults to an in-process allow-all stub) \u2014 so there's no SSRF/egress surface to inspect yet. The only data handed to screen() is ids and an amount already known to the server."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check; npm test",
+    "failures": []
+  },
+  "scoutNotes": "transfer() in src/transfers.js becomes async and, for amounts >= SCREEN_FROM_CENTS ($1000), awaits an injected screen({userId, fromId, toId, amountCents}) call before moving money, throwing HttpError(403) if the verdict disallows it; createServer(store, {screen}) and the POST /transfers route thread the screener through, defaulting to an allow-all stub. The diff updates the two real call sites (server.js route, transfers.test.js) to await, and adds one new sequential test plus README wording about the new rule.",
+  "confirmed": [
+    {
+      "title": "Screened transfer's stale balances clobber concurrent writes",
+      "file": "src/transfers.js",
+      "line": 35,
+      "category": "concurrency",
+      "severity": "critical",
+      "rootCause": "transfer() now awaits the injected screen() call after reading balances/validating but before writing the debit/credit and inserting the transfer row, so on the synchronous, lock-free Store, two concurrent calls to transfer() can interleave during that await and both act on the same stale pre-await balances \u2014 producing a lost update/overwrite or a double-spend past the insufficient-funds check for concurrent large (>= SCREEN_FROM_CENTS) transfers on the same account.",
+      "summary": "transfer() captures from/to balances before `await screen(...)` and writes those stale balances back after the await, so any other transfer that completes on the same account while the screen call is in flight gets silently overwritten (lost update), or, with two concurrent large transfers, both proceed against the same pre-await balance and double-spend.",
+      "failure": "Exactly as claimed: a large (>= SCREEN_FROM_CENTS) transfer suspended at `await screen(...)` lets any other transfer on the same account(s) complete and mutate the store in the interim; when the suspended transfer resumes it writes balances computed from its pre-await snapshot, silently clobbering the intervening write (lost update), and two concurrent large transfers against a shared balance both pass the insufficient-funds check against the same stale balance and both complete, producing a double-spend. Reproduced with exact matching numbers via both a direct transfer() unit-level race and a real concurrent-HTTP-request race through the full server stack.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 35,
+          "title": "Screened transfer's stale balances clobber concurrent writes"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 30,
+          "title": "Concurrent large transfers lose an update"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 29,
+          "title": "Await before mutation enables concurrent double-spend"
+        }
+      ],
+      "foundBy": [
+        "data-integrity",
+        "tests-that-dont-test",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js: transfer() fetches `from`/`to` via store.get (which returns the live array-element reference), does all validation including the insufficient-funds check synchronously, then for amountCents >= SCREEN_FROM_CENTS does `await screen(...)` \u2014 a genuine suspension point \u2014 and only after resuming computes the new balances from the *pre-await* `from.balanceCents`/`to.balanceCents` closures (lines 35-36), never re-reading the account. store.update() (src/store.js) replaces the array slot with a brand-new object via `{...rows[index], ...patch}`; it does not mutate in place, so a stale `from`/`to` reference held across the await is never refreshed. Pre-diff, transfer() was fully synchronous (no internal await at all), so run-to-completion semantics made this interleaving impossible \u2014 the diff is what introduces the await between the read and the write. I reproduced both failure modes exactly as claimed: (1) direct unit-level reproduction (bypassing HTTP) \u2014 a 400,000-cent account, a large (100,000) transfer suspended at a slow `screen()`, with a concurrent small (500) unscreened transfer completing while the large one is suspended: final balances were from=300,000, to1=100,000, to2=500, total=400,500 against 400,000 deposited \u2014 the small transfer's row and audit entry record 500 moved, but the large transfer's resume silently overwrote that deduction (lost update). (2) Two concurrent large transfers of 100,000 each against a 150,000 balance both passed the insufficient-funds check (both read the same stale 150,000), both resolved 'fulfilled', and final balances were from=50,000, to1=100,000, to2=100,000, total=250,000 against 150,000 deposited \u2014 a real double-spend past the funds check. I then reran scenario (1) through the actual HTTP server (test/helpers.js `serve`, real fetch calls, real routes/auth) with two concurrent real POST /transfers requests, no stubbing of transfer() itself: both returned HTTP 201 and produced the identical 400,500-vs-400,000 overcount. Grepped src/ and test/ for any mutex/lock/queue/serialization \u2014 none exists. The failure is reachable through ordinary concurrent HTTP traffic, not just a contrived unit-level race.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Production entrypoint never wires a real fraud screen",
+      "file": "src/server.js",
+      "line": 160,
+      "category": "boundary-contract",
+      "severity": "critical",
+      "rootCause": "The `npm start` production entrypoint in src/server.js builds createServer(store, { webhook }) from env vars without ever constructing or passing a `screen`, so in the real running service every transfer falls through to the default allowAll stub and is never actually screened by a fraud service, contradicting the PR's stated intent and new README claim.",
+      "summary": "The `npm start` entrypoint builds `createServer(store, { webhook })` from env vars but never constructs or passes a `screen`, so every POST /transfers in the real running service falls through to the permissive `allowAll` stub \u2014 no transfer is ever actually screened by a fraud service, contradicting the PR's stated intent and the new README claim.",
+      "failure": "none \u2014 the original failure description is accurate: running `npm start` and POSTing /transfers with amountCents >= 100_000 always succeeds and moves money regardless of fraud signals, because no `screen` is ever wired into the production createServer() call.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 160,
+          "title": "Production entrypoint never wires a real fraud screen"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Traced the full path in the worktree. src/server.js:160 (the npm-start entrypoint, guarded by the process.argv[1]===import.meta.url check) calls createServer(store, { webhook }) \u2014 no `screen` key. createServer's destructuring at src/server.js:128 is `{ exportDir, webhook, cacheTtlMs, screen } = {}`, which gives no default for `screen` itself, so the local `screen` binding is `undefined`. That binding flows into the per-request context object built at src/server.js:139 (`{..., notify: notifier.notify, screen}`), which requireUser spreads into the handler's args. The POST /transfers handler (src/server.js:85-86) does `transfer(store, user, body, { screen })`, i.e. `{ screen: undefined }`. transfers.js:16's parameter is `{ screen = allowAll } = {}`; verified with `node -e` that a destructuring default fires even when the property is present but strictly undefined (`f({screen: undefined})` logs the default, same as `f({})`). So `screen` resolves to `allowAll` (transfers.js:8, always `{allow:true}`) in the real running service, for every amount. Grepped the whole src/ tree and found no construction of an actual fraud-service client anywhere (no analog of webhooks.js's createNotifier, no LEDGER_FRAUD_URL or similar env var) \u2014 confirming nothing ever supplies a real `screen` in production. README.md:62-63 unconditionally states transfers of $1000+ are screened, which is false for the shipped npm-start wiring. Also confirmed test/transfers.test.js:71-82 is the only place `screen` appears in tests, and it calls transfer() directly with an injected stub, bypassing createServer/server.js entirely; grep of test/server.test.js shows zero references to `screen` or `createServer`, so no test exercises the real wiring gap. Everything in the claim checks out exactly as stated; could not refute any part of it.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "No test exercises the screen wiring through the HTTP layer (createServer(store, { screen }) -> route handler -> transfer()). test/server.test.js never mentions 'screen' and never asserts a 403 through an actual request; the only screening test (test/transfers.test.js) calls transfer() directly. Because transfer()'s screen parameter silently defaults to allowAll when undefined (src/transfers.js:7,16), a one-word regression in server.js's destructuring (src/server.js:85-86, 139) that drops `screen` would make every large transfer pass unscreened, and all 35 existing tests (confirmed by running npm test) would still pass.",
+      "why": "data-integrity, boundary-contract, correctness and tests-that-dont-test all look at whether the code and tests are individually right; none of them walks the specific dependency-injection seam named in the PR's own description (createServer(store, { screen })) to check whether anything actually proves that seam is connected end-to-end rather than just unit-tested on the pure function."
+    },
+    {
+      "what": "docs/security.md's 'Outbound requests' rule ('the service sends HTTP requests to one place only: the webhook endpoint the operator configures') is not updated or even acknowledged, even though the file's own header requires that 'a change that needs to break one says so in its description and changes this file in the same pull request.' The entire premise of this PR (a fraud service to screen transfers) introduces a second outbound integration point into the architecture; only README.md was touched.",
+      "why": "The security angle was scoped to code-level SSRF/egress surfaces and correctly found none (the real HTTP client isn't in this diff), but that framing never looks at the repository's own governance document as a contract the PR is obligated to keep or explicitly amend -- a process/documentation gap, not a code defect, so no code-focused angle would surface it."
+    },
+    {
+      "what": "The screen fires only when a single call's amountCents >= SCREEN_FROM_CENTS (src/transfers.js:29); there is no cumulative/velocity check across multiple transfers. A user can move any amount by issuing a sequence of transfers each just under $1,000, never triggering the fraud screen at all.",
+      "why": "Each technical angle evaluates the code against its own per-call contract, which is satisfied exactly as written; the gap is in what the feature is supposed to accomplish (fraud prevention) versus what the per-transaction mechanism can actually guarantee -- a threat-model question orthogonal to data integrity, boundary values, test quality, or correctness of the code as written."
+    }
+  ],
+  "counts": {
+    "raw": 4,
+    "rootCauses": 2,
+    "merged": 0,
+    "confirmed": 2,
+    "plausible": 0,
+    "corrected": 2,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 13,
+    "scout": 1,
+    "finders": 4,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 6,
+    "critic": 1,
+    "retries": 0
+  }
+}

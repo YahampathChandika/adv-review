@@ -666,6 +666,27 @@
           ]
         }
       ]
+    },
+    {
+      "id": "K4",
+      "title": "Concurrent saves in one process share one temp file",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "lines": [
+            62,
+            66
+          ]
+        },
+        {
+          "file": "src/store.js",
+          "lines": [
+            68,
+            72
+          ]
+        }
+      ],
+      "note": "On main since the first commit: save() names its temp file from the process id alone, so two requests saving at once write the same temp file and race on the rename; one can fail or publish the other's half-written content. Found, and marked pre-existing, by the 0.4.0 review of #8."
     }
   ],
   "adjudicated": [
@@ -900,6 +921,186 @@
         }
       ],
       "note": "True. Before this PR the route spread the body (`{ ...body, \u2026 }`), which tolerates null; the rewrite reads `body.label` directly, so a literal null JSON body throws and answers 500 instead of 400. Introduced at this line by the PR; the same class as the null-body finding on #7. Medium is fair."
+    },
+    {
+      "pr": 12,
+      "truth": true,
+      "title": "Production entrypoint never wires a real fraud screen",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            160,
+            160
+          ]
+        }
+      ],
+      "note": "True, and not planted. The PR says transfers of $1,000 or more are now screened by the fraud service, but the entrypoint builds createServer(store, { webhook }) with no screen, so the running service uses the allow-everything default and screens nothing. The description mentions the default but not that production uses it. Severity overstated: the feature is inert rather than harmful, so medium, not critical."
+    },
+    {
+      "pr": 13,
+      "truth": true,
+      "title": "ListCache entries grow without bound or eviction",
+      "sites": [
+        {
+          "file": "src/cache.js",
+          "lines": [
+            27,
+            27
+          ]
+        }
+      ],
+      "note": "True, and not planted. The list cache keys on owner and page, and an entry leaves only when the same key is read after expiry or the owner is forgotten. A signed-in user who walks ?page=1, 2, 3 and so on adds an entry per page, each kept for good. Main's single-account cache caches only accounts that exist, so it is bounded. Medium is fair."
+    },
+    {
+      "pr": 14,
+      "truth": true,
+      "title": "Hourly in-process save auto-clobbers concurrent writes",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            161,
+            161
+          ]
+        }
+      ],
+      "note": "True, narrow. Before the PR an idle copy never wrote; the timer now saves every hour whether or not anything changed, so during the two-copy window docs/deploy.md describes, an idle copy overwrites the other copy's writes with its stale state. It extends the README's known one-process limitation rather than creating a new class, and it is confined to the deploy window: high overstates it."
+    },
+    {
+      "pr": 14,
+      "truth": true,
+      "title": "Old binary's writes silently erase lastAccruedOn mid-deploy",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "lines": [
+            91,
+            91
+          ]
+        }
+      ],
+      "note": "True, narrow. A copy of the previous release strips lastAccruedOn, a key its SCHEMA does not list, from any account it writes during the rollout; a new copy that starts from that file mid-window sees the guard empty and its hourly job credits the account a second time that day. Needs a restart inside the window: low, not high."
+    },
+    {
+      "pr": 15,
+      "truth": true,
+      "title": "Cache-hit path never retries or confirms durable save",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            91,
+            96
+          ]
+        }
+      ],
+      "note": "True, and not planted. remember() records the key and its 201 before store.save(); if the save fails, the first request answers 500 but a retry with the same key answers 201 from memory for a transfer not yet on disk, lost if the process stops before another save. An idempotency record belongs after the commit. Needs a failed save: medium, not high."
+    },
+    {
+      "pr": 16,
+      "truth": true,
+      "title": "Owner webhook equal to operator's causes duplicate delivery",
+      "sites": [
+        {
+          "file": "src/webhooks.js",
+          "lines": [
+            38,
+            38
+          ]
+        }
+      ],
+      "note": "True, low, and not the planted defect though it sits on one of its lines. notify() sends to [url, ...also] without removing duplicates, so an owner who sets the operator's own endpoint makes it receive each of that account's events twice."
+    },
+    {
+      "pr": 16,
+      "truth": true,
+      "title": "Literal JSON null body crashes /webhook with 500",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            107,
+            107
+          ]
+        }
+      ],
+      "note": "True, medium, and not the planted defect though it sits in its route. The new route reads body.url before any shape check, so a literal null body answers 500 instead of 400; the same class as the null-body findings on #7 and #9."
+    },
+    {
+      "pr": 19,
+      "truth": true,
+      "title": "publicAccount never serializes frozen state",
+      "sites": [
+        {
+          "file": "src/serialize.js",
+          "lines": [
+            9,
+            9
+          ]
+        }
+      ],
+      "note": "True, and not planted. The PR adds frozenAt but publicAccount lists no field for it, though it shows closed: the freeze route answers with an account that looks unfrozen, a member cannot see that a card is frozen, and an administrator cannot find frozen accounts to unfreeze. Medium, not high."
+    },
+    {
+      "pr": 19,
+      "truth": true,
+      "title": "Rollback silently unfreezes accounts",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "lines": [
+            95,
+            95
+          ]
+        }
+      ],
+      "note": "True, narrow. A copy of the previous release strips frozenAt, which its SCHEMA does not list, from any account it writes, during the rollout window or after a rollback, so a frozen card goes live again without a record. The same mechanism as #14's lastAccruedOn finding; worse here because it undoes a security action. Narrow but not low: medium."
+    },
+    {
+      "pr": 3,
+      "truth": true,
+      "title": "POST /accounts 500s on a null JSON body",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            52,
+            52
+          ]
+        }
+      ],
+      "note": "True, and not planted. The refactor replaced `{ ...body, \u2026 }`, which tolerates null, with `body.label` and `body.currency`, so a literal null JSON body throws and answers 500 instead of 400. Introduced by this PR; the same class as the null-body findings on #7 and #9. Medium is fair."
+    },
+    {
+      "pr": 6,
+      "truth": true,
+      "title": "actingFor lets an admin impersonate any user, not just members",
+      "sites": [
+        {
+          "file": "src/auth.js",
+          "lines": [
+            38,
+            38
+          ]
+        }
+      ],
+      "note": "True, low, and not planted. The PR and README say an administrator acts on a member's behalf, but actingFor checks only the caller's role, so an administrator can act as another administrator or an accountant. Only that user's own accounts can move, which limits the harm; with D6 the act is recorded under the other administrator's name. High overstates it."
+    },
+    {
+      "pr": 8,
+      "truth": true,
+      "title": "No reconciliation path for totals drift across a rollback",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "lines": [
+            106,
+            106
+          ]
+        }
+      ],
+      "note": "True, medium, and not planted. The running total is kept only by the new code, and migration 003 builds it once. During the rollout window docs/deploy.md describes, and after any rollback, copies of the previous release take deposits without bumping it, and nothing ever recomputes it from the accounts: the summary stays wrong for good. Separate from D9, which is the new code's own withdrawals."
     }
   ],
   "bases": {

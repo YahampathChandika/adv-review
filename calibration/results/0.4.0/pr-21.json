@@ -1,0 +1,97 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "e9f6f76a791dd86f98ab91c01dc31dc5004a3cfe",
+  "target": {
+    "prs": [
+      21
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "tests-that-dont-test",
+      "why": "Empirically verified the new test is not vacuous: I moved the `randomUUID()` call from once-per-`deliver()` to once-per-attempt inside the retry loop (reproducing exactly the bug this test guards against), ran `node --test test/webhooks.test.js` alone, and the new test failed as expected (ids[0] !== ids[1]) while the rest passed. Restored the file afterward (`git status` clean). The test genuinely pins the one-id-per-event behavior."
+    },
+    {
+      "title": "boundary-contract",
+      "why": "Grepped the whole repo for the new header name and for any 'delivery' consumer: the only place `x-ledger-delivery` is read is the new test's mock `send`. No internal code parses, stores, forwards, or depends on this header's shape — its sole consumer is the external, out-of-repo webhook receiver. The header is built with the same plain-object literal pattern already used (and already tested) for the untouched `x-ledger-signature` header, so nothing on either side of an internal boundary changed."
+    },
+    {
+      "title": "silent-drops",
+      "why": "Read store.js's SCHEMA (`users`, `accounts`, `transfers`, `audit`) — there is no webhook/delivery collection anywhere in the store, and this diff adds none. The delivery id is generated and consumed entirely in-memory inside a single `deliver()` call and is never written to, or expected to be read back from, any store."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "Read server.js in full: this diff adds no route and does not touch any `notify(...)` call site. The three existing call sites (account.closed, transfer.created, deposit.created) already sit behind `requireUser`/`requireRole` and are byte-for-byte unchanged by this PR — there is no new or changed entry point for this angle to examine."
+    },
+    {
+      "title": "security",
+      "why": "The new header's value is `randomUUID()` — fixed hex/dash format, not user-controlled, so no header-injection surface. No secret is logged or exposed (the failure-path `log.warn` message doesn't include it), the request still goes to the single operator-configured URL (docs/security.md's 'outbound requests to one place only' rule is untouched), and the header travels over the same transport as the already-unsigned `content-type` header, so it introduces no new trust boundary beyond what already existed pre-PR."
+    },
+    {
+      "title": "data-integrity",
+      "why": "The diff touches no storage, concurrency, or cache logic — the retry loop, the `pending` Set, and `idle()` are unchanged; the only behavioral change is tagging each already-existing retry attempt of an already-existing in-memory-only delivery with a stable id. No new write path, no new concurrent access, no new unbounded growth."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema or migration file is touched and nothing is persisted by this change. The new header is purely additive on an outbound HTTP call to an external, independently-versioned receiver that can simply ignore an unrecognized header — there is no internal reader that could go stale across a staged rollout."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR adds a per-event delivery id to outgoing webhooks: `randomUUID()` is generated once per `deliver()` call, outside the retry loop, and sent as `x-ledger-delivery` alongside the existing `x-ledger-signature` header, so a receiver can de-duplicate retried attempts of the same event. README is updated and a new test asserts one id per delivery, different ids across two deliveries, and UUID-shaped output.",
+  "confirmed": [],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The exhausted-retry failure path (`log.warn(`webhook ${event} not delivered after ${delays.length + 1} attempts`)` in src/webhooks.js) is not changed to include the new `delivery` id. Combined with the already-confirmed facts that nothing about a delivery is persisted anywhere (silent-drops/data-integrity) and this log line is the sole server-side trace of a specific failed delivery, this is the one moment a human actually needs the id this PR introduces: to tell a receiver's support team 'which delivery was this' when triaging a drop. The feature's own purpose (a stable identifier for correlating one event across two systems) is undermined on exactly the unhappy path where correlation matters.",
+      "why": "'security' only checked that this same log line doesn't leak the secret, not whether it should carry the new id. 'silent-drops'/'data-integrity' confirmed nothing is persisted, but concluded that meant no finding, without following through to 'therefore this log line is the only record, and it's missing the key field.' No angle treats operator-facing observability of the new feature as its own subsystem."
+    },
+    {
+      "what": "The new test's UUID-shape assertion, `assert.match(ids[0], /^[0-9a-f-]{36}$/)`, doesn't actually enforce UUID structure — confirmed with a quick node check that a 36-character string of a single repeated hex digit and no dashes at all (`'a'.repeat(36)`) also matches it. The scout's mutation test (moving `randomUUID()` into the retry loop) only exercised the 'same id across retries' assertions (`ids[0] === ids[1]`, `ids[1] !== ids[2]`); it never exercised this third assertion. A future change that swapped `randomUUID()` for some other 36-char hex/dash id scheme with the wrong internal structure would pass this test silently.",
+      "why": "'tests-that-dont-test' verified non-vacuousness only for the id-reuse behavior via one targeted mutation; it didn't check each of the test's three assertions independently, so the weak regex on the third assertion was never exercised by that verification."
+    },
+    {
+      "what": "`deliver()`'s new local `const delivery = randomUUID()` (a string) and `notify()`'s pre-existing `const delivery = deliver(event, data).finally(...)` (a Promise) now share the identifier `delivery` for two unrelated values in nested scopes of the same small file. It causes no bug today, but it's a trap for the next person who touches this function and conflates the two.",
+      "why": "The 'correctness' angle looks for behavioral defects, not naming hygiene; a shadowing pair with no current runtime effect falls outside every listed angle's checklist even though it's a direct, visible consequence of this diff's choice of variable name."
+    }
+  ],
+  "counts": {
+    "raw": 0,
+    "rootCauses": 0,
+    "merged": 0,
+    "confirmed": 0,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 3,
+    "scout": 1,
+    "finders": 1,
+    "triage": 0,
+    "sameSite": 0,
+    "skeptics": 0,
+    "critic": 1,
+    "retries": 0
+  }
+}

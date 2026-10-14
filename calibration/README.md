@@ -125,6 +125,84 @@ it would at a PR of yours. The answer key is not reachable from any branch.
 
 ## Results
 
+### 0.4.0 candidate — 14 October 2026, Sonnet agents
+
+Both sets, after the same-site check and branch review: one review per PR from a fresh
+clone with `run.sh` in two lanes, Sonnet agents, Opus orchestrating, the computed
+ceiling of 20. Results in `results/0.4.0/`.
+
+| | v1, #1 to #11 | v2, #12 to #21 |
+| :- | :- | :- |
+| Planted defects confirmed | **9 of 10** | **8 of 8** |
+| Confirmed findings true | 15 of 15 | 18 of 18 |
+| On the clean PRs | no findings | no findings |
+| Agents per PR | 4 to 20, mean 12.0 | 3 to 19, mean 12.7 |
+| Time per PR | 10 to 23 minutes | 13 to 35 minutes |
+
+259 agents and about 117 dollars at list price for the 21 reviews.
+
+| PR | set | planted | angles run | dropped | agents | minutes | raw | root causes | upheld | refuted |
+| :- | :- | :- | -: | -: | -: | -: | -: | -: | -: | -: |
+| #1 | v1 | D1 | 3 | 5 | 9 | 10 | 4 | 1 | 1 | 0 |
+| #2 | v1 | D2 | 5 | 4 | 14 | 19 | 7 | 2 | 2 | 0 |
+| #3 | v1 | D3 | 4 | 4 | 8 | 14 | 2 | 1 | 1 | 0 |
+| #4 | v1 | D4 | 6 | 2 | 12 | 21 | 6 | 1 | 1 | 0 |
+| #5 | v1 | D5 | 6 | 3 | 12 | 14 | 6 | 1 | 1 | 0 |
+| #6 | v1 | D6 | 5 | 4 | 14 | 23 | 5 | 2 | 2 | 0 |
+| #7 | v1 | D7, D8 | 7 | 2 | 20 | 17 | 8 | 3 | 3 | 0 |
+| #8 | v1 | D9 | 6 | 2 | 16 | 23 | 9 | 3 | 3 | 0 |
+| #9 | v1 | D10 | 6 | 2 | 17 | 22 | 5 | 3 | 2 | 1 |
+| #10 | v1 | clean | 4 | 4 | 6 | 19 | 0 | 0 | 0 | 0 |
+| #11 | v1 | clean | 2 | 6 | 4 | 15 | 0 | 0 | 0 | 0 |
+| #12 | v2 | D11 | 4 | 4 | 13 | 17 | 4 | 2 | 2 | 0 |
+| #13 | v2 | D12 | 5 | 4 | 15 | 35 | 11 | 4 | 3 | 1 |
+| #14 | v2 | D13 | 6 | 3 | 18 | 31 | 8 | 3 | 3 | 0 |
+| #15 | v2 | D14 | 6 | 2 | 16 | 33 | 8 | 2 | 2 | 0 |
+| #16 | v2 | D15 | 5 | 3 | 12 | 19 | 4 | 3 | 3 | 0 |
+| #17 | v2 | D16 | 5 | 3 | 14 | 32 | 9 | 2 | 2 | 0 |
+| #18 | v2 | D17 | 4 | 4 | 10 | 16 | 5 | 1 | 1 | 0 |
+| #19 | v2 | D18 | 7 | 2 | 19 | 23 | 7 | 3 | 3 | 0 |
+| #20 | v2 | clean | 5 | 4 | 7 | 13 | 0 | 0 | 0 | 0 |
+| #21 | v2 | clean | 1 | 7 | 3 | 15 | 0 | 0 | 0 | 0 |
+
+**The miss.** D3 on #3: the seed script still calls the old `openAccount` signature.
+No finder opened `scripts/seed.mjs` this time. The critic named it, with the crash
+reproduced, but the critic's gaps are reported unverified and do not count. 0.2.0 and
+0.3.0 both confirmed it, and nothing a finder sees on a pull request changed in 0.4.0, so
+this is run-to-run variance in the finders, seen once.
+
+**The harder set was not harder.** Every v2 defect was confirmed. The likely reasons:
+`docs/security.md` and `docs/deploy.md` state the rules most v2 defects break, which
+gives a reviewer who reads the docs a checklist, and the service is still small enough
+to read whole. The set gives no headroom yet; a larger codebase, or defects against
+conventions nobody wrote down, would.
+
+**Findings nobody planted.** Fourteen confirmed findings, five on v1 and nine on v2, are
+true defects that nobody planted. On v2: the fraud screen is never wired in production;
+the new list cache grows without bound; during a rollout an idle copy's hourly save
+overwrites the other copy, and old copies strip `lastAccruedOn` and `frozenAt`, the
+second unfreezing accounts; an idempotency record is written before its commit; frozen
+state is invisible in the API; and the new webhook route sends duplicates and answers a
+null body with a 500. On v1, two repeat from earlier passes, the control-character
+regex and #9's seed script, and three are new: a null-body 500 on #3, the running total
+drifting during a rollout on #8, and an administrator able to act as another
+administrator on #6. Each is in `manifest.json` under `adjudicated`, with its reasoning.
+Two findings were pre-existing and left out: a temp-file race in `save()`, now recorded
+under `known`, and the whole-file save the fixture's README already lists as a
+limitation.
+
+**The same-site check** ran on #7, #9 and #15 and merged nothing: each time the groups
+at one place were distinct defects, which it ruled correctly. The duplicate it was built
+for did not recur, because triage grouped #7's findings itself. The check's merge path
+is tested but was not exercised by a real run.
+
+**Branch review.** `--branch origin/feat/overdraft`, with no pull request, reviewed the
+same head as #4 and confirmed D4. `--branch origin/feat/freeze-account` reviewed the same
+head as #19 and confirmed D18; it also reported four findings the PR run did not: a
+deposit into a frozen account, interest on a frozen account, unfreezing without telling
+the card processor, and freeze and close ignoring each other. Branch results are not
+scored.
+
 ### 0.3.0 — 14 October 2026, Sonnet agents
 
 The same eleven PRs, same setup, after the blind-test rule (a test that cannot fail is

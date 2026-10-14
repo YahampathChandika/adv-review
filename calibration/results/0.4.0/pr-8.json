@@ -1,0 +1,211 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "074592689156ce5df3f42042a91dffbd81dfed27",
+  "target": {
+    "prs": [
+      8
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "silent-drops",
+      "why": "The new `totals` schema entry (`['id','cents']` in src/store.js) is exactly the shape both writers (bumpTotal in src/transfers.js, and migration 003's up()) produce, and summary() reads back the same two keys via store.all('totals'). No field is renamed, widened, or stripped by `pick()` anywhere in this diff; the only real omission found is a missing function call (withdraw never invokes bumpTotal), which is a logic defect best caught under correctness/data-integrity, not a schema/serialization drop."
+    },
+    {
+      "title": "security",
+      "why": "Both new routes (/withdrawals, /summary) reuse the existing requireRole('admin', ...)/requireUser bearer-token middleware verbatim, take no string into a shell/SQL/HTML sink, make no outbound request, and log no secret or token. Nothing in the diff opens a new injection, redirect, SSRF, or data-exfiltration surface beyond what deposit/transfer already exercise."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR adds an admin-only POST /withdrawals (mirroring deposit, refusing to overdraw) and GET /summary, which reports money held per currency from a new `totals` collection kept incrementally by deposits and withdrawals instead of scanning accounts. Migration 003 seeds `totals` additively from existing account balances.",
+  "confirmed": [
+    {
+      "title": "Withdrawals never update the totals cache",
+      "file": "src/transfers.js",
+      "line": 68,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "withdraw() in src/transfers.js never calls bumpTotal() the way deposit() does, so the totals collection (and GET /summary) only ever increases and permanently overstates money held once any withdrawal occurs, and the new tests (transfers.test.js, server.test.js) never re-invoke summary()/GET /summary after a withdrawal so they cannot catch it.",
+      "summary": "withdraw() mutates accounts.balanceCents but never calls bumpTotal, so the running `totals` cache that GET /summary reads is only ever incremented (by deposit) and never decremented, permanently overstating money held per currency after any withdrawal.",
+      "failure": "Deposit 50 AUD then withdraw 20: summary(store)/GET /summary remains {AUD: 50} instead of {AUD: 30}, permanently diverging from the true sum of balances, and no existing test re-checks summary after a withdrawal.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "Withdrawals never update the totals cache"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "withdraw() never updates the totals running sum"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 78,
+          "title": "withdraw() never updates the running total"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "Withdrawals never decrement the running totals"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 78,
+          "title": "Withdrawals never update the totals cache"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 212,
+          "title": "New tests never re-check summary() after a withdrawal"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 206,
+          "title": "New summary tests never re-check summary after a withdrawal"
+        }
+      ],
+      "foundBy": [
+        "data-integrity",
+        "correctness",
+        "tests-that-dont-test",
+        "boundary-contract",
+        "migrations-and-rollout"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js: deposit() calls bumpTotal(store, account.currency, amountCents) at line 62 right before record(); withdraw() (lines 68-80) performs the identical balance-mutation pattern but has no bumpTotal call anywhere \u2014 it goes straight from store.update('accounts', ...) to record(store, admin.id, 'withdrawal', accountId). grep across src/ confirms bumpTotal is called exactly once in the whole codebase (in deposit), and totals is otherwise only touched by store.js schema/EMPTY and migration 003's one-time backfill. store.js's migrate() only applies migrations whose version exceeds data.version and is gated by a persisted version field (confirmed by test/store.test.js's 'migrations run once' test), so there is no recompute/reconciliation path after 003 runs once. I reproduced the exact scenario end-to-end in the worktree (bypassing HTTP, calling the functions directly): after deposit(50) then withdraw(20) on a fresh AUD account, summary(store) printed {AUD: 50} while the true sum of accounts.balanceCents by currency was {AUD: 30} and the account's own balanceCents was correctly 30 \u2014 a permanent overstatement with no code path to correct it. I also ran the full test suite (node --test): all 24 tests pass, including both new tests ('a deposit raises the currency's total; a withdrawal lowers the balance and never overdraws' in transfers.test.js, and 'the summary is for administrators and follows deposits' in server.test.js) \u2014 confirming neither test re-invokes summary()/GET /summary after performing a withdrawal, exactly as claimed; both only assert on the account's balanceCents post-withdrawal. The withdraw() route is reached via POST /withdrawals guarded only by requireRole('admin'), with no additional guard that would prevent this sequence. One inaccuracy: the cited line numbers for sites (5) test/transfers.test.js:212 and (6) test/transfers.test.js:206 do not exist \u2014 the file is only 80 lines long and the actual test spans lines 71-80 in the new file (confirmed against the diff's hunk header @@ -67,3 +67,14 @@). The substance of those two sites (the new tests never re-check summary after a withdrawal) is nonetheless correct, just mis-cited; I did not treat this as grounds to refute since the underlying claim at those sites holds. All src/transfers.js line citations (68 and 78, used across sites 0-4) land correctly inside the real withdraw() function in both the current repo and match the diff's own line numbers for the added hunk. The defect is real, reachable through the only route the PR adds, uncaught by the new tests, and has no reconciliation mechanism \u2014 matching the claim closely enough that no correction to summary/severity/introduced-by-diff is needed.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Store.save() tmp filename collides under concurrency",
+      "file": "src/store.js",
+      "line": 65,
+      "category": "concurrency",
+      "severity": "high",
+      "rootCause": "Store.save() derives its temp filename solely from process.pid (constant for the process's life), so two concurrent save() calls on the same server race on the same tmp path and the loser's rename throws ENOENT, turning a successful mutation into a client-facing 500 \u2014 a pre-existing bug now exercised by more mutating routes.",
+      "summary": "Store.save() names its temp file solely from process.pid (constant for the process's life), so two concurrent store.save() calls on the same server (now reachable from deposit, withdraw, transfer, and account open/close routes) race on the same tmp path and one of the two `rename` calls throws ENOENT, turning a successfully-applied, successfully-persisted mutation into a client-facing 500.",
+      "failure": "Two concurrent mutating requests (e.g. two POST /withdrawals on the same account) race in Store.save() because its tmp path depends only on process.pid; the losing request's rename throws ENOENT and its client receives 500 even though both mutations were applied and persisted to disk \u2014 verified by direct reproduction against Store.save() (30/30 trials) and end-to-end through the real HTTP server with genuine concurrent fetch() calls (500 to one client, 201 to the other, both withdrawals reflected in the final persisted balance).",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 65,
+          "title": "Store.save() tmp filename collides under concurrency"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": true,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js: save() builds tmp = `${this.file}.${process.pid}.tmp`, constant for the process's life. Read src/server.js: every mutating route (accounts open/close, transfers, deposits, withdrawals) does a synchronous in-memory mutation followed by `await store.save()` with no mutex serializing requests, and readJson awaits the request body so the event loop can interleave two concurrent handlers. Confirmed via `git show HEAD -- src/store.js` that this PR does not touch save()/tmp-path logic at all \u2014 it only adds `totals` to SCHEMA/EMPTY \u2014 so the bug is indeed pre-existing and this PR's /withdrawals route is just one more caller, exactly as the finder stated. Reproduced the race twice: (1) directly against Store, firing two concurrent save() calls after two synchronous in-memory mutations (mimicking two concurrent request handlers) \u2014 30/30 trials produced an ENOENT on rename for one of the two. (2) End-to-end through the real, unmodified HTTP server (createServer) with two genuine concurrent fetch() POST /withdrawals requests on the same account using real bearer-token admin auth \u2014 4/5 runs produced one request returning {status:500, error:'internal error'} and the other 201, while the final on-disk balance after both settled reflected BOTH withdrawals applied (100000 -> 99700 from -100 and -200). This is exactly the claimed failure: a mutation that is already durably persisted is reported to its client as a 500, which would cause a real double-withdrawal on admin retry. I could not refute any part of the claim; severity (HIGH) and introducedByDiff (pre-existing, newly exercised by more routes) both match what I verified.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "No reconciliation path for totals drift across a rollback",
+      "file": "src/store.js",
+      "line": 106,
+      "category": "migration-rollout",
+      "severity": "medium",
+      "rootCause": "The migration framework only ever runs a migration whose version exceeds data.version, so once version reaches 3 there is no mechanism to recompute/reconcile the totals cache against accounts again, making any drift (from bugs, rollbacks, or direct edits) permanent and invisible.",
+      "summary": "Migration 003's own comment (src/migrations/003-totals.js:2) says the running total is \"kept by every deposit and withdrawal after\" the seed, but nothing in the migration framework can ever recompute `totals` from `accounts` again once data.version reaches 3, so any drift \u2014 whether from the withdraw() bug above, a rolled-back old server binary processing writes it doesn't know `totals` exists for, or a direct data edit \u2014 is permanent and invisible.",
+      "failure": "Any event that moves accounts.balanceCents without a corresponding bumpTotal call on the same run (a mixed-version deploy window where an old binary unaware of `totals` processes a deposit/withdrawal against a file already migrated to version 3, a rolled-back old binary, a direct edit to ledger.json, or simply this diff's own withdraw() which never calls bumpTotal) desyncs the `totals` collection from `accounts` permanently: migrate() in src/store.js only runs a migration whose version exceeds data.version (line 106), so once data.version is 3, migration 003 can never re-run and nothing else recomputes totals from accounts. GET /summary then reports a stale, wrong per-currency figure indefinitely, with no error, log, or way to force a resync short of manually editing data.version below 3 or hand-editing the file.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 106,
+          "title": "No reconciliation path for totals drift across a rollback"
+        }
+      ],
+      "foundBy": [
+        "migrations-and-rollout"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Reproduced empirically in two steps. (1) Extracted pre-PR src/store.js, transfers.js, auth.js, audit.js and migrations 001/002 from HEAD^ into a scratch dir, crafted a version:3 ledger.json (totals:[{id:'AUD',cents:100}], one account balanceCents:60), loaded and ran old-binary migrate() -> applied [] (both old migrations have version <= 3), then ran old deposit() (balance 60->70) and saved: on-disk totals stayed [{id:'AUD',cents:100}] while accounts moved to 70 and version stayed 3. (2) Loaded that same drifted file with the current post-PR src/store.js and ran its migrate() with the real src/migrations dir (which now includes 003-totals.js): applied [] again, because mod.version (3) <= this.data.version (3) in src/store.js:106, so totals is never recomputed and stays stuck at 100 against real accounts summing to 70. This confirms the claim's mechanism exactly: once data.version reaches 3, nothing in the migration framework, any route, or any flag can force totals to be rebuilt from accounts. docs/deploy.md independently documents 'two copies can run against one file during a deploy' as this project's normal rollout model, which is precisely the old/new-binary race the claim relies on to produce drift, so this isn't a contrived edge case for this codebase. Also directly relevant: withdraw() in this same diff never calls bumpTotal (only deposit() does), an even more direct way to desync totals from accounts on every withdrawal, with nothing downstream (summary() just reads the totals collection verbatim) able to detect or correct it.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "docs/deploy.md documents that \"two copies can run against one file during a deploy.\" The pre-PR deposit() (visible in the diff as the function bumpTotal() is newly inserted into) has no concept of `totals`. So during the ordinary, required rollout of this very PR -- not a hypothetical rollback -- any deposit handled by an old-release instance updates balanceCents but leaves `totals` untouched, meaning GET /summary (only reachable on the new release) is guaranteed to read a stale/undercounted total during the deploy window by the project's own documented procedure, with no backfill or scan-fallback to close the gap once rollout completes.",
+      "why": "This requires reading docs/deploy.md -- a file untouched by the diff -- and specifically connecting its 'two copies running' rollout rule to what the old (pre-diff) deposit() function lacked. Of the six angles, only migrations-and-rollout sits near this territory, and it reported a same-shaped but narrower finding scoped to reverting to old code after the fact (a rollback), not the inevitable forward-deploy drift the repo's own contract creates for this exact PR; correctness/data-integrity/boundary-contract/authz have no reason to open an operational doc outside the diff, and tests-that-dont-test only looks at the test suite, which never exercises a multi-process deploy window."
+    }
+  ],
+  "counts": {
+    "raw": 9,
+    "rootCauses": 3,
+    "merged": 0,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 3,
+    "downgraded": 0,
+    "preexisting": 1,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 16,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 7,
+    "critic": 1,
+    "retries": 0
+  }
+}

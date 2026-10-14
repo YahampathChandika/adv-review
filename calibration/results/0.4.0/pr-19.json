@@ -1,0 +1,214 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "1cac44578f11f347ba81a0079de446337b81b27d",
+  "target": {
+    "prs": [
+      19
+    ]
+  },
+  "angles": [
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "frozen-account invariant scope across subsystems",
+      "source": "scout"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "Checked for injection (no SQL/HTML construction touched), secrets (webhooks.js unchanged, secret still never logged), SSRF/unsafe redirects (webhook URL stays operator-configured only, per docs/security.md 'Outbound requests', unchanged by this diff), and CORS (none added). The one security-shaped issue this diff actually has — the card processor being told about an account before the caller's right to act on it is confirmed — is the same defect already targeted by authz-and-attribution's sharpen; no independent security surface exists here."
+    },
+    {
+      "title": "boundary-contract",
+      "why": "Traced every caller/consumer this diff touches: freezeAccount/unfreezeAccount's only caller is server.js and the signatures match; requireUser/requireRole wiring matches the README's owner/admin table; AccountCache's onChange listener still fires correctly on the new store.update() calls. The two real boundary mismatches I found — serialize.js never exposing frozen state, and store.js's SCHEMA whitelist dropping frozenAt under old code — are the same locations already assigned to silent-drops and migrations-and-rollout, so a separate agent here would just restate those."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR adds POST /accounts/:id/freeze (owner) and /accounts/:id/unfreeze (admin), a `frozenAt` column via an additive migration (004), and a 409 guard in transfer() for frozen accounts. The freeze route fires the `account.freeze-requested` webhook before freezeAccount() runs its ownership check and already-frozen check, the opposite order from every other notify() call in server.js and from docs/security.md's 'authorisation first' rule.",
+  "confirmed": [
+    {
+      "title": "Freeze webhook fires before ownership check",
+      "file": "src/server.js",
+      "line": 115,
+      "category": "authz",
+      "severity": "critical",
+      "rootCause": "In the POST /accounts/:id/freeze handler, notify('account.freeze-requested', ...) is called before freezeAccount() runs (and before store.save()), so the card processor is told to freeze an account even when the request is later rejected for lack of ownership, for being already frozen, or otherwise fails — breaking the save-then-notify pattern every other mutating route follows.",
+      "summary": "The POST /accounts/:id/freeze route sends the account.freeze-requested webhook to the card processor before freezeAccount() has checked that the caller owns the account (or that it isn't already frozen), so any signed-in user can trigger that third-party notification for an account they don't own.",
+      "failure": "POST /accounts/:id/freeze lets any signed-in user (not just the account's owner) trigger a real account.freeze-requested webhook delivery to the external card processor for an account they don't own, naming the real owner's accountId and the attacker's own id as requestedBy -- because notify() at server.js:115 fires synchronously (unawaited) before freezeAccount() at server.js:116 performs the ownership check (404) or the already-frozen check (409) that would otherwise have blocked the request. Verified directly: a non-owner's freeze call returns 404 to the caller while the mocked webhook transport already recorded one account.freeze-requested delivery for the target account. The same ordering also double-fires the webhook when an already-frozen account is frozen again. This violates docs/security.md's 'Authorisation first' rule and departs from the save-then-notify ordering used by every other mutating route in the file.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before ownership check"
+        },
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before authorization or save"
+        },
+        {
+          "file": "src/server.js",
+          "line": 115,
+          "title": "Freeze webhook fires before auth/idempotency check"
+        },
+        {
+          "file": "src/server.js",
+          "line": 113,
+          "title": "Freeze webhook fires before ownership/state checks"
+        }
+      ],
+      "foundBy": [
+        "authz-and-attribution",
+        "data-integrity",
+        "tests-that-dont-test",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js (freeze route, lines 110-120), src/accounts.js (freezeAccount, getOwnAccount), src/webhooks.js (createNotifier/notify), and src/auth.js (requireUser). Confirmed: requireUser only authenticates the bearer token (auth.js:21-27) and never checks that params[0] belongs to the caller. The freeze handler calls notify('account.freeze-requested', {accountId: params[0], requestedBy: user.id}) at server.js:115 before calling freezeAccount(store, user, params[0]) at server.js:116. freezeAccount (accounts.js:69-75) is where both the ownership check (via getOwnAccount, accounts.js:40-44, throwing 404 if account.ownerId !== user.id) and the already-frozen check (409) actually live. notify() (webhooks.js:36-40) is fire-and-forget: it calls deliver() without awaiting it, so the webhook send is already in flight by the time freezeAccount can throw. Wrote and ran a reproduction test in the worktree (using test/helpers.js serve() with a mock webhook send, removed afterward): POST /accounts/<bob's-account>/freeze with tok-cy (a different signed-in member) returned {status:404, error:'no such account'}, while server.notifier.idle() showed the mock transport had already received exactly one delivery: {event:'account.freeze-requested', data:{accountId:<bob's account id>, requestedBy:<cy's user id>}}. Ran the full suite afterward (npm test): all 35 tests pass unchanged, consistent with the claim's explanation that the PR's own new test (test/server.test.js:136-154) never passes a `webhook` option to serve(), so createNotifier returns the no-op notifier (webhooks.js:14) and the test cannot observe the premature firing. Also confirmed docs/security.md's 'Authorisation first' rule verbatim ('before any write, any file, any log line about the resource, and any webhook') and that every other mutating route in server.js (close: 73-80, transfer: 90-98, deposit: 100-108) calls notify() only after its mutating function and store.save() have already succeeded -- freeze is the only route that inverts this order. The entire freeze route is new in this diff, so it is diff-introduced. All four reported sites (server.js:112-115 under different lenses) describe this same real location and mechanism; none are false.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "publicAccount never serializes frozen state",
+      "file": "src/serialize.js",
+      "line": 9,
+      "category": "silent-drop",
+      "severity": "high",
+      "rootCause": "publicAccount() in src/serialize.js was never updated to expose frozen/frozenAt (unlike closedAt -> closed), so every API response for an account — including the freeze/unfreeze responses themselves and GET /accounts/:id — is indistinguishable between a frozen and an unfrozen account.",
+      "summary": "publicAccount(), the single function every account-returning route serializes through, has no field for frozenAt (unlike closedAt, which it already exposes as `closed`), so a frozen account's API representation is byte-for-byte identical to an unfrozen one.",
+      "failure": "A member calls POST /accounts/:id/freeze after losing a card. The handler returns HTTP 200 with body {id, label, currency, balanceCents, closed:false, createdAt} — no frozen indicator at all, identical to the pre-freeze body (verified live: freeze response and a subsequent GET /accounts/:id and GET /accounts list are all identical to the unfrozen state, even though store.get('accounts', id) on the raw row shows frozenAt correctly set). The caller/UI that just froze the account cannot confirm the freeze took effect, a later GET cannot show the account as frozen, and the ONLY way any API consumer can discover an account is frozen is to attempt a transfer and receive the new 409 'a frozen account cannot transfer' error. The same gap applies to the admin's POST /accounts/:id/unfreeze response and to every other route that returns an account (POST /accounts, GET /accounts/:id, GET /accounts list) — none can ever show frozen=true. The value is correctly written to the store and schema (SCHEMA in src/store.js:12 includes frozenAt, and the raw row round-trips it; AccountCache invalidates correctly on the write), so this is purely a serializer omission, not a storage bug.",
+      "sites": [
+        {
+          "file": "src/serialize.js",
+          "line": 9,
+          "title": "publicAccount never serializes frozen state"
+        },
+        {
+          "file": "src/serialize.js",
+          "line": 9,
+          "title": "publicAccount never exposes frozen state"
+        }
+      ],
+      "foundBy": [
+        "silent-drops",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/serialize.js: publicAccount() lists id/label/currency/balanceCents/closed/createdAt with no frozen or frozenAt field, unlike closedAt which is exposed as `closed`. Confirmed via grep that every account-returning route in src/server.js (POST /accounts, GET /accounts/:id, GET /accounts list, close, freeze, unfreeze, interest-rate) serializes through this same publicAccount(). Ran the server live using the repo's own test/helpers.js (freshStore/serve): created an account, froze it, then called GET /accounts/:id and GET /accounts — all three response bodies (create, freeze response, GET single, GET list) showed identical {closed:false,...} with no frozen field, while store.get('accounts', id) on the raw row showed frozenAt correctly set to a timestamp. The new test added in this diff (test/server.test.js) only checks HTTP status codes on freeze/unfreeze/transfer calls and never inspects the response body, so it does not catch this. frozenAt is new in this diff (added to SCHEMA and introduced by migration 004), so the serializer gap is introduced by this diff. I could not refute any part of the claim.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "Rollback silently unfreezes accounts",
+      "file": "src/store.js",
+      "line": 95,
+      "category": "migrations-and-rollout",
+      "severity": "high",
+      "rootCause": "store.update()'s write path filters every row through pick(SCHEMA[collection], ...), so rolling the server back to the pre-PR code (whose accounts SCHEMA lacks frozenAt) causes the next unrelated update on a frozen account to silently strip frozenAt, un-freezing it with no audit trail.",
+      "summary": "store.update()'s write path filters every row through pick(SCHEMA[collection], ...), so if the server is ever rolled back to the pre-PR commit (whose accounts SCHEMA has no frozenAt) while the data file already has a frozen account, the next unrelated write to that row silently strips frozenAt from the record instead of leaving it intact, defeating the freeze with no audit trail.",
+      "failure": "Confirmed by direct repro against this worktree's src/store.js: insert a row with frozenAt set, then simulate the base commit's accounts SCHEMA (no 'frozenAt') and call store.update('accounts', id, { interestRateBps: 150 }) -- an edit that never touches frozenAt. The returned/stored row comes back with the frozenAt key gone entirely ('frozenAt' in updated -> false), not merely unset. Every call site treats a frozen account by `if (account.frozenAt)`, so a missing key reads identically to 'never frozen': transfers.js's `if (from.frozenAt || to.frozenAt) throw ...` guard no longer fires, and the account that was frozen because a member's card was lost is silently transferable again -- with no admin action, no account.unfreeze audit entry, and the card processor never told it's unfrozen. Worse, this is not just an edge case: src/interest.js's accrueInterest() (the daily scheduled job, scripts/run-jobs.mjs interest) iterates every account with `if (account.closedAt) continue` -- it does NOT skip frozen accounts -- and calls store.update('accounts', account.id, {...}) on every account carrying a balance and rate. So after any rollback to the pre-PR commit, the very first scheduled interest run silently and systematically unfreezes every frozen, interest-bearing account in one pass, recorded only as an ordinary 'interest' audit entry that gives no hint the freeze was lost.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 95,
+          "title": "Rollback silently unfreezes accounts"
+        }
+      ],
+      "foundBy": [
+        "migrations-and-rollout"
+      ],
+      "preexisting": false,
+      "verdict": "PLAUSIBLE",
+      "reasoning": "Verified the mechanism by direct execution, not just reading. Checked out the pre-PR store.js (parent commit 7fc1c3c), confirmed SCHEMA.accounts there has no 'frozenAt'. Wrote a ledger.json with a frozen account (frozenAt set, as the post-PR code would have written it), loaded it with the pre-PR Store, and called store.update('accounts', id, { balanceCents: ... }) — an edit that never names frozenAt. Result: 'frozenAt' in updated was true before the update and false after; the row came back with the key gone entirely, not merely unset. This matches store.update()'s implementation exactly: rows[index] = pick(collection, {...rows[index], ...patch}), and pick() rebuilds the object keeping only SCHEMA[collection] keys as known to the currently-running code. Confirmed the call-path precondition too: src/interest.js's accrueInterest() only skips accounts with `if (account.closedAt) continue` — it does not check frozenAt — and unconditionally calls store.update() on every account with a positive balance and rate, exactly as claimed; scripts/run-jobs.mjs wires this to `node scripts/run-jobs.mjs interest`, the documented daily scheduled job, so the call path is real and not hypothetical. transfers.js's new guard is `if (from.frozenAt || to.frozenAt) throw ...`, which reads identically for 'absent key' and 'never frozen', so a stripped frozenAt silently restores transferability. I looked for anything that would block this under my 'reachability' lens: no version gate exists anywhere that refuses to run older code against newer data (migrate() only applies forward migrations by version comparison, it never validates or refuses a downgrade), and no test in test/store.test.js or test/server.test.js exercises this path (the only migration-version test is a monotonic forward-migration count). The scenario the claim requires — code rolled back while the persisted data file is not, which is the normal real-world shape of a code-only deployment rollback — is exactly the kind of thing an additive-migration design claims to be safe against, and the migration file's own comment ('Additive: none is.') asserts that safety. I could not find a guard, caller restriction, or test that prevents this, and my own independent repro reproduced the exact symptom described (silent, auditless loss of frozenAt on the next unrelated write, systematically triggered by the daily interest job). I was unable to refute it.",
+      "verifiedBy": [
+        "refute:p3.1",
+        "refute:p3.2",
+        "refute:p3.3"
+      ],
+      "panel": "2 of 3 skeptics could not refute it"
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The daily interest-accrual job (`accrueInterest` in src/interest.js, run via `node scripts/run-jobs.mjs interest`, a cron-style entry point that opens the store directly and never goes through server.js) only skips accounts with `closedAt` set — it was not updated to skip `frozenAt` accounts. Verified directly against the PR's code: seeding an account with `frozenAt` set and calling `accrueInterest(store)` still grew its `balanceCents` (100000 -> 100013). So a frozen account's balance keeps changing every day it sits frozen, undercutting the point of a freeze even though the README only promises 'no transfers' through the HTTP API.",
+      "why": "Every angle that ran reasoned about callers and routes reachable from server.js — boundary-contract's own write-up says it traced 'every caller/consumer this diff touches' starting from freezeAccount/unfreezeAccount's callers. scripts/run-jobs.mjs is a separate CLI entry point that calls accrueInterest directly and is never a caller of freeze/unfreeze, so a trace rooted at the new functions' callers never reaches it. Only reading interest.js on its own and asking whether it respects the new field surfaces this."
+    },
+    {
+      "what": "`closeAccount` (src/accounts.js, untouched by this diff) still only checks `account.closedAt` and a zero balance, never `account.frozenAt`. Verified by HTTP call against the PR's running server: freeze an account as its owner (200), then call POST /accounts/:id/close with the same owner token — it succeeds (200, `closed: true`) while the account is still frozen. The account's own owner can unilaterally terminate a frozen account — the one lifecycle change the PR's description says only an administrator controls — with no admin action at all.",
+      "why": "The reported findings all sit inside the three call sites that actually changed (the freeze route, publicAccount, migration rollback); closeAccount's hunk never changed, so nothing in the diff pointed an angle at it. It only surfaces by reading the sibling function next to the one that did change and asking what the new field should have constrained there too."
+    },
+    {
+      "what": "`freezeAccount` itself (the new function) never checks `account.closedAt`, unlike every other state-changing function in accounts.js (closeAccount checks closedAt; setInterestRate checks closedAt). Verified by HTTP call: close an account, then call POST /accounts/:id/freeze on it as the owner — it succeeds (200), setting frozenAt on an already-closed account and firing the `account.freeze-requested` webhook, telling the card processor to urgently react on an account that can no longer move money anyway.",
+      "why": "This sits inside the one function the diff adds, so it looks like exactly what authz-and-attribution or correctness should cover — but their reported output is about the ordering of the webhook versus the ownership check, not which account states freeze should refuse. Nobody asked 'what guard does every sibling function in this file have that this new one is missing' once the ownership question was already answered."
+    }
+  ],
+  "counts": {
+    "raw": 7,
+    "rootCauses": 3,
+    "merged": 0,
+    "confirmed": 2,
+    "plausible": 1,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 19,
+    "scout": 1,
+    "finders": 7,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 9,
+    "critic": 1,
+    "retries": 0
+  }
+}

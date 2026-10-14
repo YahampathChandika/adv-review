@@ -1,0 +1,147 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "f278b0c346ce2ad4e6fb68b3654f61ff3181657f",
+  "target": {
+    "prs": [
+      18
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No new or changed entry point (route, server function, job, tool). dailyInterest/accrueInterest's call sites, authorisation checks, and the 'system' actor attribution in record(store, 'system', 'interest', ...) are untouched by this diff \u2014 only the arithmetic inside dailyInterest changed."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface, no secrets, no redirects/CORS/SSRF, and no new third-party data flow \u2014 webhooks.js and its notify() calls are untouched, and accrueInterest (run only from scripts/run-jobs.mjs) never calls notify at all, so the fractional cents this diff introduces never reach the webhook payload or any other external sink."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file, no SCHEMA change, no field added/removed/renamed. balanceCents stays the same key with the same declared shape in src/store.js SCHEMA; only the numeric value stored under it changes from integer to float, which is a data-integrity/correctness question, not a migration/rollout-ordering one."
+    },
+    {
+      "title": "silent-drops",
+      "why": "store.pick() already lists balanceCents in SCHEMA.accounts (unchanged by this diff) and store.update writes it straight through; verified empirically (ran the test suite and a manual simulation) that store.update persists the fractional value \u2014 e.g. the test asserts balanceCents becomes 100_013.7 and it does. Nothing new is written that the store or a serialiser silently discards."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR claims to fix dailyInterest rounding down to 'round to the nearest cent' by changing Math.floor(x) to Math.round(x*100)/100. That formula actually rounds to the nearest HUNDREDTH of a cent (since balanceCents is already in cents, the extra *100/100 is spurious), so it returns fractional cents like 13.7 instead of the correct nearest-cent value of 14, and the updated tests simply pin the new (wrong) fractional output instead of the value the PR's own stated intent implies. README and docs/security.md ('Amounts are whole cents') are not reconciled with the new fractional-cent behaviour.",
+  "confirmed": [
+    {
+      "title": "Daily interest scaling bug corrupts balanceCents",
+      "file": "src/interest.js",
+      "line": 13,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "dailyInterest (src/interest.js:13) wraps the result in `Math.round(x * 100) / 100` even though balanceCents/x is already denominated in cents, so it rounds to the nearest 1/100 of a cent rather than the nearest whole cent the docstring, README, and PR title claim \u2014 producing fractional balanceCents that violates the integer-cents invariant enforced elsewhere (src/transfers.js:12,43 Number.isInteger checks, src/accounts.js:49 exact-0 close check), drifts further via floating-point error on repeated accrual, and is pinned (not caught) by the updated test at test/interest.test.js:45 whose own expected value (13.7) disproves the 'nearest cent' claim.",
+      "summary": "dailyInterest multiplies an already-cents value by 100 before rounding and divides by 100 after, so it rounds to the nearest 1/100 of a cent (not the nearest cent as the docstring, README and PR title claim), and the fractional-cent result is then added straight onto balanceCents, which every other part of the codebase (src/transfers.js Number.isInteger checks) treats as an integer.",
+      "failure": "dailyInterest(100_000, 500) returns 13.7 (rounded to the nearest 1/100 cent) instead of the nearest-cent value 14; accrueInterest then sets balanceCents to a fractional value (100013.7). Because deposit/transfer enforce Number.isInteger(amountCents) (src/transfers.js:12,43) with no other withdrawal path, a member can reduce the balance only to a non-zero floating remainder (0.6999999999970896 in the simulated case), and closeAccount's exact balanceCents !== 0 check (src/accounts.js:49) then permanently refuses to close that account \u2014 the opposite of the PR's stated goal of fixing saver complaints. The updated test/interest.test.js (lines 10 and 27, not line 45 as one of the five sub-citations says) asserts the fractional outputs as expected, so the suite enshrines rather than catches the bug.",
+      "sites": [
+        {
+          "file": "src/interest.js",
+          "line": 13,
+          "title": "Daily interest scaling bug corrupts balanceCents"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 13,
+          "title": "Interest produces fractional, drifting balanceCents"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 13,
+          "title": "Fractional-cent balances permanently lock accounts"
+        },
+        {
+          "file": "test/interest.test.js",
+          "line": 45,
+          "title": "Rounding doesn't match its own \"nearest cent\" claim"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 13,
+          "title": "Interest rounds to nearest 1/100 cent, not cent"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "boundary-contract",
+        "data-integrity",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/interest.js:11-14 after checkout: dailyInterest computes rawCents = balanceCents*rateBps/10000/365 (already denominated in cents), then does Math.round(rawCents*100)/100 \u2014 rounding to the nearest 1/100 of a cent, not the nearest cent the docstring/README/PR title claim. Confirmed with node: raw=13.698630136986301, true nearest-cent (Math.round(raw))=14, but PR formula gives 13.7. Checked src/transfers.js:12 and :43 \u2014 both require Number.isInteger(amountCents) for deposit/transfer, and src/accounts.js:49 requires balanceCents !== 0 (exact) to closeAccount, with no other withdrawal path that accepts a fractional/exact-balance amount (confirmed by reading all of accounts.js \u2014 closeAccount's only balance check is the strict !==0 guard, and openAccount/setInterestRate have no fractional-amount escape hatch). accrueInterest (src/interest.js:22-36) adds the fractional amount straight onto balanceCents via store.update with no rounding/coercion in store.js (checked src/store.js \u2014 update() does a plain merge, no integer enforcement on balanceCents, only transfers.js validates the amountCents argument passed in, not the stored balance). Simulated the real flow: dailyInterest(100_000,500) -> balance becomes 100013.7; withdrawing the max whole-cent amount (100013) leaves remainder 0.6999999999970896 (confirmed via node, matches finder's exact figure), which is neither 0 nor an integer, so closeAccount permanently refuses this account. Ran the actual updated test/interest.test.js with node --test: all 3 tests pass, and the file literally asserts dailyInterest(100_000,500)===13.7 and balanceCents===100_013.7 (lines 10 and 27), i.e. the suite pins the fractional-cent output as 'correct' rather than catching the regression. This is a genuine, diff-introduced defect: the pre-PR code (Math.floor of the already-cents value) was correctly whole-cent; the PR's rewrite is the exact cause. One minor citation note: site (3) names test/interest.test.js:45, but line 45 is the unrelated 'already closed' assertion at file end \u2014 the actual pinning assertions are at lines 10 and 27 (as the claim's own 'cited evidence' section correctly says). This is a line-number slip in that one sub-citation, not a flaw in the substance of the claim, which is fully verified.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "docs/security.md:17 states the repo's own security rule \u2014 'Amounts are whole cents' \u2014 and docs/security.md:3 states the repo's process contract that a change breaking a rule 'says so in its description and changes this file in the same pull request.' dailyInterest now returns fractional cents (e.g. 13.7) which get written into balanceCents, breaking the stated rule, yet the PR description never mentions it and the diff never touches docs/security.md.",
+      "why": "This is a cross-file governance/contract-compliance check against a policy document, not an arithmetic, test-quality, boundary, or storage-write question. The scout's four ruled-in angles (correctness, tests-that-dont-test, boundary-contract, data-integrity) only read interest.js/store.js/the tests. The scout's ruled-out 'security' angle explicitly scoped itself to injection/secrets/SSRF/webhooks and never opened docs/security.md, so this explicit, self-declared invariant violation was never checked by any angle."
+    },
+    {
+      "what": "Once an account accrues any fractional-cent interest, it can never be closed again: closeAccount (src/accounts.js:49) requires balanceCents strictly === 0, but transfer and deposit (src/transfers.js:12,43) both require Number.isInteger(amountCents), so no integer withdrawal can ever zero a fractional balance, and no other code path adjusts balance directly. Confirmed by simulation: $1000 at 5% -> balance 100013.7 after one day; withdrawing the max integer 100013 leaves 0.7 cents forever (bal-100000 = 13.69999999999709, never 0). No existing test exercises interest accrual followed by closeAccount.",
+      "why": "This is a behavioral interaction between interest.js's new output type (float) and an unrelated invariant in accounts.js/transfers.js authored independently of this PR. 'Correctness' examined only dailyInterest's own formula; 'data-integrity' confirmed the store persists the float value correctly (which it does) but didn't follow that value into the account-lifecycle invariant that assumes integers; 'boundary-contract' looked at dailyInterest's own input boundaries (zero/negative), not at a downstream function's equality check; 'tests-that-dont-test' assessed whether the changed assertions test something, not whether an entirely different test file now has an untested interaction. No single angle's framing reaches into accounts.js to find this."
+    }
+  ],
+  "counts": {
+    "raw": 5,
+    "rootCauses": 1,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 10,
+    "scout": 1,
+    "finders": 4,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  }
+}

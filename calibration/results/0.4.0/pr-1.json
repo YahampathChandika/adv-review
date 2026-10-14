@@ -1,0 +1,141 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "5af451d1118a286fc59dd8d1ca957e4c5aebecf4",
+  "target": {
+    "prs": [
+      1
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "The route is pre-existing, not new; it is still wrapped in requireUser and still calls getOwnAccount (src/server.js) for ownership, both untouched by the diff. The handler makes no write (no store.save() call anywhere on this path), so there is no attribution-of-writer question either."
+    },
+    {
+      "title": "security",
+      "why": "No new entry point, no string built into a query/HTML/URL, no secret or token touched, no header/CORS/redirect change, and no outbound call to a third party. The only new logic is arithmetic on a page number and a pure function rename/extraction."
+    },
+    {
+      "title": "data-integrity",
+      "why": "Read src/store.js: the store is one in-process JS array held in memory with no cache layer (the 'read cache' from a prior commit title is not present anywhere in src/), so there is no concurrent-read/cache-invalidation path for this diff to break. The diff adds no writes, so there is nothing for a partial failure or a non-idempotent retry to leave disagreeing; the new pagination only shrinks what a single response holds, it doesn't add unbounded growth."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file, no SCHEMA change in src/store.js, no new stored field. Old and new code read the exact same `transfers` rows through the same schema; there is nothing to stage or roll back."
+    },
+    {
+      "title": "silent-drops",
+      "why": "This diff writes nothing new (it is a read-path pagination change plus a same-behavior rename/extraction for export). The one place transfers do go missing from a response is a slicing defect in how items are windowed, which the correctness and boundary-contract angles below are better placed to chase than the write-time-field-stripping pattern this angle targets."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR pages GET /accounts/:id/transfers (20 per page, ?page=, same {page,pageSize,total,items} envelope as GET /accounts), extracting the old unpaged transfersFor into allTransfersFor so the CSV export keeps writing every row. The new transfersFor duplicates listAccounts' pagination pattern in src/accounts.js but computes its slice bound differently.",
+  "confirmed": [
+    {
+      "title": "Off-by-one drops a transfer from every page",
+      "file": "src/transfers.js",
+      "line": 69,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "In src/transfers.js, transfersFor computes end = start + PAGE_SIZE - 1 and calls all.slice(start, end); since slice's end bound is exclusive, each page returns only PAGE_SIZE-1 (19) items instead of 20, permanently dropping the transfer at the page boundary (index page*PAGE_SIZE - 1) from every page — and the new test in test/transfers.test.js only exercises 3 transfers (far below PAGE_SIZE=20), so it cannot catch this off-by-one.",
+      "summary": "transfersFor computes `end = start + PAGE_SIZE - 1` then calls `all.slice(start, end)`, which is exclusive of `end`, so each page returns only PAGE_SIZE-1 items and the transfer at index `page*PAGE_SIZE - 1` is skipped by both that page and the next, never appearing on any page.",
+      "failure": "GET /accounts/:id/transfers (and the underlying transfersFor) silently drops the transfer at 0-indexed position page*PAGE_SIZE-1 from every page, for any account with at least PAGE_SIZE transfers. Verified directly: with 25 transfers, page=1 returns 19 items, page=2 returns 5, page=3 returns 0 -- 24 of 25 transfers ever appear across any page, while `total` correctly reports 25 -- so a client paging through the full history (exactly the PR's stated purpose) permanently loses one transfer per 20, with no error or signal that anything is missing.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 69,
+          "title": "Off-by-one drops a transfer from every page"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 69,
+          "title": "Off-by-one makes transfer pages 19 long and drops items"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 69,
+          "title": "Off-by-one slice drops one transfer per page"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New paging test never exceeds PAGE_SIZE, so it can't catch the off-by-one"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "boundary-contract",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js:76-82: `const end = start + PAGE_SIZE - 1` then `all.slice(start, end)`. slice's second argument is an exclusive upper bound, so this yields only PAGE_SIZE-1=19 elements per page instead of 20, and the element at index `start+19` is skipped entirely (excluded from the current page by the slice bound, and excluded from the next page because the next page's start is `start+PAGE_SIZE`, one past it). Contrasted with src/accounts.js:34 which correctly uses `mine.slice(start, start + PAGE_SIZE)` (no -1). I ran the real code in this worktree (test/helpers.js freshStore, openAccount, deposit, transfer, allTransfersFor, transfersFor) with 50 stored transfers for one account: page1.items.length=19, page2.items.length=19, page3.items.length=10 (total across pages=48, not 50), and exactly 2 transfers present in allTransfersFor's output were absent from the union of all three pages' items -- one dropped at each page boundary, matching the claimed mechanism exactly. I also ran the full test suite (npm test): all 23 tests pass, confirming the new test 'the history is paged from page 1' (test/transfers.test.js:71-79) only creates 3 transfers, far below PAGE_SIZE=20, so it never observes the bug. The claim holds at all 4 cited sites and is a real, diff-introduced, user-visible defect (GET /accounts/:id/transfers silently drops one transfer from every full page) that no caller, guard, or existing test prevents.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "No test, before or after this diff, exercises exportTransfers/allTransfersFor with more than a handful of rows. The PR's entire stated justification is that CSV export \"must be unaffected and still write every transfer\" for \"statements with hundreds of transfers\" — that's literally why allTransfersFor was split out. But test/server.test.js's one export test creates an account with zero transfers and only asserts the CSV header line exists (src/export.js is never called with any rows, let alone >20). So the exact guarantee this refactor exists to protect is unverified: a future edit that points export.js back at the paginated transfersFor, or introduces a filter/slice bug in allTransfersFor, would pass the whole suite.",
+      "why": "tests-that-dont-test looked at the tests the diff added (transfers.test.js, server.test.js's history assertions) and correctly flagged the pagination test's off-by-one-concealing dataset; it had no reason to go looking for a test that doesn't exist at all for a file (export.js) the diff touches only via an import rename. Correctness and boundary-contract both read transfers.js's slicing logic, not export.js's missing coverage. None of the five ruled-out angles name test coverage as their concern (data-integrity explicitly steers towards 'the slicing defect' as the one place transfers go missing, pointing attention away from export.js)."
+    },
+    {
+      "what": "transfers.js now imports PAGE_SIZE from accounts.js, so /accounts and /accounts/:id/transfers share one page-size constant despite being independently documented endpoints with unrelated growth characteristics (an owner's account count vs. a statement's transfer count). A later change to tune one endpoint's page size (e.g. accounts.js raising PAGE_SIZE to 50 because account lists are short) silently changes the other endpoint's page size too, with no test or name signalling the shared dependency, and the README's \"20 a page\" line for transfers would go stale without anyone touching transfers.js.",
+      "why": "This is a cross-module coupling consequence of the diff reaching into accounts.js for a constant, not a bug in the changed lines themselves — correctness and boundary-contract read transfers.js's arithmetic, not whether the constant it imports is safe to share. migrations-and-rollout was scoped to storage schema/SCHEMA changes, not to a constant now serving two unrelated API contracts. security and authz-and-attribution don't touch pagination semantics at all. silent-drops was scoped to write-time field stripping, not forward-looking maintenance coupling."
+    }
+  ],
+  "counts": {
+    "raw": 4,
+    "rootCauses": 1,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 9,
+    "scout": 1,
+    "finders": 3,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  }
+}

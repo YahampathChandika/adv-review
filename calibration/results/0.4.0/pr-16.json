@@ -1,0 +1,181 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "f7520841c763d950e4f570b8a1092a58b1774f17",
+  "target": {
+    "prs": [
+      16
+    ]
+  },
+  "angles": [
+    {
+      "title": "security",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "Migration 004 only adds webhookUrl defaulting to null for rows missing it, mirrors migration 003's exact pattern, removes nothing, and store.migrate() is idempotent (version <= stored skips). No deploy-order hazard: old code ignores the new column, new code treats its absence as null."
+    },
+    {
+      "title": "silent-drops",
+      "why": "Traced webhookUrl end to end: added to store.js SCHEMA.accounts so `pick` keeps it on insert/update, set via setWebhook and read back via store.get(...).webhookUrl in the close/transfer/deposit routes and via closeAccount's returned row; store.test.js and the new server.test.js round-trip it. It is deliberately excluded from serialize.js's publicAccount/publicTransfer (so it doesn't leak over the read API), which is a design choice, not a drop."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No new concurrent-write or cache path: AccountCache already invalidates on every store.update via the existing onChange hook, which fires for the webhookUrl write same as any other. notify()'s loop over [url, ...also] creates one const `delivery` per iteration (block-scoped), so there's no shared-closure races across the fan-out; delivery is the same fire-and-forget, independently-retried pattern as before, just repeated per target."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR lets any account owner register a webhook URL (POST /accounts/:id/webhook, validated as http/https and ownership-checked) and makes deposits, transfers and account-closing deliver the same HMAC-signed event to that URL in addition to the operator's configured endpoint, via a webhookUrl column added additively in migration 004. src/webhooks.js's notify() now fans an event out to the operator URL plus an arbitrary per-account `also` list with no further validation of the destination.",
+  "confirmed": [
+    {
+      "title": "Account webhook URL enables full SSRF",
+      "file": "src/accounts.js",
+      "line": 69,
+      "category": "authorization",
+      "severity": "critical",
+      "rootCause": "setWebhook (src/accounts.js) validates only that the owner-supplied URL parses and has an http/https scheme, with no block on internal/private/link-local hosts, so the notifier (which fetches that exact URL on every deposit, transfer, and close) can be pointed by any member at arbitrary internal or third-party targets \u2014 a direct SSRF, and a violation of docs/security.md's explicit invariant that the service never requests a user-supplied URL, confirmed by reproduction (owner's webhookUrl is delivered to verbatim with no host-level checks anywhere in the codebase).",
+      "summary": "setWebhook only checks that the owner-supplied URL parses and has an http/https scheme, so the server later fetches that exact attacker-chosen URL on every deposit, transfer, and close touching the account, letting any plain member proxy requests at arbitrary internal or third-party hosts.",
+      "failure": "An authenticated non-admin user (role 'member') opens an account, calls POST /accounts/:id/webhook with { url: 'http://169.254.169.254/latest/meta-data/' } (accepted, 200), then closes that same account (owner-only, no other role needed). I ran this exact sequence against the live server (test harness, fixture user tok-bob) and confirmed the server actually issues an HTTP POST, HMAC-signed with the operator's own webhook secret, to that address: console output was `requests issued, solely by a member acting alone: [ 'https://operator.example/hook', 'http://169.254.169.254/latest/meta-data/' ]`. I separately confirmed via `new URL()` that 127.0.0.1, ::1, 10.0.0.5, localhost, decimal-encoded 2130706433, and hex-encoded 0x7f.0.0.1 all pass the validation in setWebhook unchanged -- none of loopback, link-local, private ranges, or IP-encoding tricks are blocked, and credentials-in-URL (user:pass@host) also pass through untouched. docs/security.md:12-14 states as a standing, self-enforced invariant that 'The service sends HTTP requests to one place only: the webhook endpoint the operator configures. It never requests a URL that a user supplied, in whole or in part,' and docs/security.md:3-4 requires a breaking change to update that file in the same PR; this diff does not touch docs/security.md. Additionally, the delivery fetch (src/webhooks.js's deliver, using global fetch) follows redirects by default, so even a hostname allow-list would need separate handling for redirect-based SSRF, which also is not present.",
+      "sites": [
+        {
+          "file": "src/accounts.js",
+          "line": 69,
+          "title": "Account webhook URL enables full SSRF"
+        }
+      ],
+      "foundBy": [
+        "security"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/accounts.js: setWebhook (lines 69-81) validates only that `new URL(url)` parses and that protocol is http/https \u2014 no host/IP checks of any kind. Read src/server.js: the route `POST /accounts/:id/webhook` is wrapped only in `requireUser` (any authenticated user, any role) and calls `getOwnAccount`, which only checks `account.ownerId === user.id` \u2014 no admin role required. Read src/webhooks.js: `deliver`/`notify` POST verbatim to whatever target string is passed, using global `fetch` (default redirect: 'follow'), with no allowlist or private-range filtering anywhere \u2014 confirmed via grep across src/ that no ssrf/private/internal/blocklist/dns-lookup guard exists in the codebase. Read docs/security.md:12-14, which states the standing invariant that the service 'never requests a URL that a user supplied, in whole or in part' and requires docs/security.md to be updated in the same PR when broken; `git show --stat` on the PR commit confirms docs/security.md is NOT among the changed files. I then built and ran a live reproduction (test/helpers.js's freshStore/serve) as the fixture's plain 'member' user (tok-bob, no admin involved at any step): opened an account (POST /accounts, 201), set its webhook to `http://169.254.169.254/latest/meta-data/` (POST /accounts/:id/webhook, 200), then closed that same account (POST /accounts/:id/close \u2014 owner-only, no other role needed, 200). After `server.notifier.idle()`, the mock `send` recorded requests issued to BOTH `https://hooks.example/ledger` (operator) and `http://169.254.169.254/latest/meta-data/` (attacker-chosen) \u2014 i.e., a lone member, with no admin action anywhere in the chain, achieved delivery to an arbitrary internal address, which is even stronger than the finder's own repro (which routed through the admin-only /deposits endpoint to produce the same result). I also confirmed via `new URL()` that 127.0.0.1, ::1, 10.0.0.5, localhost, decimal-encoded 2130706433, hex-encoded 0x7f.0.0.1, and credentials-embedded user:pass@host all parse successfully with an http: protocol and would pass setWebhook's check unchanged. This is a full SSRF, newly introduced by this diff (no user-supplied webhook target existed before it; src/webhooks.js previously only ever sent to the operator's own configured `url`), and critical given the live reproduction reaches the AWS/GCP/Azure instance-metadata address with a signed HMAC request attacker cannot even read (but the unauthenticated-metadata case on most clouds doesn't need the signature anyway) via nothing but a member's own, trivially-opened, zero-balance account.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "Owner webhook equal to operator's causes duplicate delivery",
+      "file": "src/webhooks.js",
+      "line": 38,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "notify() in src/webhooks.js builds its delivery list as `[url, ...also].filter(Boolean)` with no de-duplication against the operator's own configured `url`, so when an account owner's webhookUrl is set to the same address as the operator's endpoint, that endpoint receives the identical signed event twice per deposit/close (and potentially per transfer) \u2014 reproduced directly: setting an owner webhook equal to the operator's URL and triggering a deposit produced two identical deliveries to the same endpoint.",
+      "summary": "notify() builds its delivery list as `[url, ...also].filter(Boolean)` with no de-duplication against the operator's own configured `url`, so when an account's owner-set webhookUrl equals the operator's LEDGER_WEBHOOK_URL, the same event is POSTed to that one endpoint twice.",
+      "failure": "Confirmed by direct test against createNotifier: with `url: 'https://hooks.example/ledger'` and `notify('deposit.created', data, ['https://hooks.example/ledger'])`, two separate HTTP POSTs are sent to the identical target, each independently timestamped (`at` differs per call) and independently HMAC-signed, so the receiver cannot tell they are the same underlying deposit \u2014 there is no event id/nonce anywhere in the payload (`{ event, data, at }` in src/webhooks.js) to dedupe on. This is reachable in practice: src/server.js's transfer handler already explicitly dedupes the two account endpoints of a transfer via `[...new Set(ends)]` (src/server.js:88-89), showing the author anticipated endpoint collisions within one call \u2014 but that same Set never includes the operator's own `url`, and the close/deposit call sites (src/server.js:70, 99) pass single-element `also` arrays with no de-dup at all. Any account owner who points their account webhook at the same URL the operator already uses (e.g. a shared internal collector, or simply copying a known endpoint) will receive every one of that account's events twice.",
+      "sites": [
+        {
+          "file": "src/webhooks.js",
+          "line": 38,
+          "title": "Owner webhook equal to operator's causes duplicate delivery"
+        },
+        {
+          "file": "src/webhooks.js",
+          "line": 37,
+          "title": "Same event double-delivered to a shared webhook URL"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Reproduced directly. Unit-level: createNotifier({url:'https://hooks.example/ledger', send, delays:[]}).notify('deposit.created', data, ['https://hooks.example/ledger']) resulted in two separate send() calls to the identical URL (sent.length === 2). End-to-end: started the real server with webhook.url = 'https://hooks.example/ledger', had account owner Bob set his account's webhookUrl to that same URL via POST /accounts/:id/webhook (200 OK, no uniqueness check in setWebhook), then triggered a deposit as admin. Result: two identical ['https://hooks.example/ledger','deposit.created'] deliveries. Confirmed in src/webhooks.js:37-38 that notify() builds `[url, ...also].filter(Boolean)` with no de-duplication against the operator's own `url`, while src/server.js:88-89 only dedupes the transfer's two account endpoints against each other via `[...new Set(ends)]`, never against the operator's `url`. This is new code (the `also` parameter and multi-target delivery did not exist before this diff), so it is correctly attributed as introduced by this diff.",
+      "verifiedBy": [
+        "refute:1"
+      ]
+    },
+    {
+      "title": "Literal JSON null body crashes /webhook with 500",
+      "file": "src/server.js",
+      "line": 107,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "The POST /accounts/:id/webhook handler in src/server.js reads `body.url` before any shape validation, so a literal JSON `null` request body (which readJson() parses successfully, since only a fully-empty body short-circuits to `{}`) throws an unhandled TypeError on `body.url`, which the top-level catch-all turns into an opaque 500 instead of the 400 every other malformed-input case gets \u2014 reproduced directly via an HTTP call with a JSON `null` body.",
+      "summary": "POST /accounts/:id/webhook evaluates `body.url` before any shape validation, so a literal JSON `null` body throws an unhandled TypeError that the catch-all turns into an opaque 500 instead of the 400 every other malformed-input case gets.",
+      "failure": "Any signed-in user (requireUser \u2014 not even ownership-checked yet, since `body.url` is evaluated as an argument before setWebhook's getOwnAccount runs) POSTs /accounts/<id>/webhook with raw body `null` (valid JSON, parses fine via readJson). `body.url` throws 'Cannot read properties of null (reading url)'; the dispatcher's catch-all classifies it as status 500 ('internal error') and logs a stack trace via console.error, where the project's own contract (README: 'unexpected failure is a 500 that says nothing about itself'; the existing 400 path for `{}`/array bodies) implies this foreseeable, validatable input should be a 400. Verified live against the running server: a null body on /webhook returned status 500 with {\"error\":\"internal error\"}. The same unguarded-property/destructuring pattern already exists pre-diff on POST /transfers (destructures body directly), POST /deposits, and POST /accounts/:id/interest-rate (body.interestRateBps) \u2014 confirmed those also 500 on a null body \u2014 but those are gated by requireRole('admin'); the new /webhook route reproduces the same class of bug on a broader, ordinary-member-reachable route.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 107,
+          "title": "Literal JSON null body crashes /webhook with 500"
+        }
+      ],
+      "foundBy": [
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Reproduced directly against the running server: POST /accounts/:id/webhook with body: null (which JSON.stringifies to the 4-byte literal 'null') from an authenticated member token returned status 500 with {\"error\":\"internal error\"}, and the server log showed 'TypeError: Cannot read properties of null (reading url)' at src/server.js:107. Verified readJson only short-circuits to {} on a fully empty body (chunks.length === 0); JSON.parse('null') succeeds and returns the value null, so execution reaches `body.url` inside the route handler before setWebhook's getOwnAccount ownership check ever runs, confirming the finder's point that this is reachable before ownership is checked, by any signed-in user. This matches the claimed failure and site exactly.",
+      "verifiedBy": [
+        "refute:1"
+      ]
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "docs/security.md states as a kept invariant that the service sends HTTP requests only to the operator-configured endpoint and never to a user-supplied URL, and its own preamble requires any change that breaks a rule to update that file in the same PR. This PR's setWebhook (src/accounts.js:68-81) plus the also-target fan-out in src/webhooks.js/src/server.js does precisely what that rule forbids, and the PR neither updates docs/security.md nor mentions the break in its description \u2014 it only updates README.md and rewrites the contradicting line in src/webhooks.js's own module comment. It also means an operator who never configures LEDGER_WEBHOOK_URL (relying on that documented guarantee of zero outbound calls) now gets outbound HTTP calls anyway, solely because an end user registered their own webhook.",
+      "why": "This is a cross-file documentation/policy consistency check (diffing the PR's touched files against a different file's stated invariants and the repo's own contribution process), not a code-behavior property \u2014 none of security, boundary-contract, authz-and-attribution, tests-that-dont-test or correctness inspects documentation files against the code diff."
+    },
+    {
+      "what": "test/server.test.js's new test is titled \"an owner's account webhook receives that account's events, beside the operator's\" (a general, plural claim) but its assertions only exercise the deposit.created path. The transfer.created path (src/server.js ~88-89), which fans out to two accounts' webhookUrls and de-duplicates via new Set(ends) \u2014 the one piece of materially new logic in this PR \u2014 and the account.closed path (~70) are never exercised with any account's webhookUrl set, anywhere in the suite. I confirmed by a manual probe (temporarily added then removed) that both paths currently behave correctly, so there's no live bug today, but the PR ships its two most complex delivery branches with zero regression coverage despite a test name that implies they're covered.",
+      "why": "This requires comparing what a test's name/intent claims against what its assertions actually exercise for the specific new code paths introduced by this diff \u2014 a tests-that-dont-test-style check the scout's own reported findings for that angle do not mention, so it was not actually produced even though the angle was nominally run."
+    }
+  ],
+  "counts": {
+    "raw": 4,
+    "rootCauses": 3,
+    "merged": 0,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 12,
+    "scout": 1,
+    "finders": 5,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 4,
+    "critic": 1,
+    "retries": 0
+  }
+}

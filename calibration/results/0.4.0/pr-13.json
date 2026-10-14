@@ -1,0 +1,251 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "f9885a2d214fad13783549473781a3855694632b",
+  "target": {
+    "prs": [
+      13
+    ]
+  },
+  "angles": [
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "cross-process cache coherence for the interest job",
+      "source": "scout"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "silent-drops",
+      "why": "No schema/serializer change: src/store.js's SCHEMA/pick and src/serialize.js are untouched by this diff. The cache is a pure in-memory Map, not a write path to any store/ORM/queue; whether it reads back what it wrote is exactly what data-integrity and correctness already cover."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "No new or changed entry point: GET /accounts was already behind requireUser before this diff. The cache key's ownerId comes from the server-derived user.id (never from client input), and transfer()/deposit()'s record(...) attribution calls are unmodified by this diff (only forget() calls were inserted after them)."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface, secret, redirect, CORS change or third-party data flow is introduced; cache keys come from an authenticated user id plus a validated integer page, not raw untrusted strings. The one real risk this diff creates (unbounded cache growth keyed by a client-chosen page number) is squarely a data-integrity 'unbounded growth, no eviction' case, not a security-boundary one."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "git show --stat confirms only src/cache.js, src/server.js, src/transfers.js and one new test file changed; src/migrations/ is untouched and no schema or deploy-order concern exists here."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds a 30s per-owner ListCache for GET /accounts, invalidated by explicit listCache.forget(ownerId) calls added to transfer() and deposit() in src/transfers.js. The sibling AccountCache (for GET /accounts/:id) instead hooks store.onChange so every write auto-invalidates; ListCache has no such hook and relies on each mutator remembering to call forget.",
+  "confirmed": [
+    {
+      "title": "Opening or closing an account doesn't invalidate its list cache",
+      "file": "src/accounts.js",
+      "line": 13,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "openAccount() and closeAccount() (src/accounts.js) mutate the accounts collection but never call listCache.forget(ownerId) \u2014 unlike transfer()/deposit() in src/transfers.js, which do \u2014 so a cached GET /accounts page can omit a just-opened account or still show a just-closed account as open for up to ttlMs (30s); the only end-to-end cache-invalidation test (test/list-cache.test.js) opens accounts only before ever reading the list, so it never exercises a cached page being invalidated by an open or close and cannot catch this gap. (F1/F2/F8 cite the route handlers in src/server.js that call these functions; F5/F8/F9/F10 cite the functions themselves in src/accounts.js \u2014 all the same missing-forget() defect, reported at open, at close, and in the test that fails to cover either.)",
+      "summary": "openAccount (src/accounts.js:9-26) and closeAccount (src/accounts.js:46-53) mutate the accounts collection but never call listCache.forget(ownerId), so a cached GET /accounts page can omit a just-created account or show a just-closed account as still open for up to 30 seconds.",
+      "failure": "GET /accounts caches a user's page; a subsequent POST /accounts (open) or POST /accounts/:id/close by the same owner is not reflected in that cached page until the 30s TTL expires \u2014 reproduced: after caching a 1-item list, opening a second account leaves the cached GET /accounts response missing it; after caching a 2-item list, closing one of them leaves the cached response showing closed:false even though GET /accounts/:id correctly shows closed:true.",
+      "sites": [
+        {
+          "file": "src/accounts.js",
+          "line": 13,
+          "title": "Opening or closing an account doesn't invalidate its list cache"
+        },
+        {
+          "file": "src/accounts.js",
+          "line": 9,
+          "title": "Opening/closing an account leaves the list cache stale"
+        },
+        {
+          "file": "src/accounts.js",
+          "line": 9,
+          "title": "Opening an account leaves the cached list stale"
+        },
+        {
+          "file": "src/accounts.js",
+          "line": 46,
+          "title": "Closing an account leaves the cached list showing it open"
+        },
+        {
+          "file": "src/server.js",
+          "line": 53,
+          "title": "Opening an account leaves the cached list missing it"
+        },
+        {
+          "file": "src/server.js",
+          "line": 67,
+          "title": "Closing an account leaves the cached list showing it open"
+        },
+        {
+          "file": "test/list-cache.test.js",
+          "line": 114,
+          "title": "list-cache tests only exercise transfer/deposit, missing the open/close gap"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "boundary-contract",
+        "tests-that-dont-test",
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Checked out the PR commit and read src/accounts.js, src/server.js, src/cache.js, src/store.js, test/list-cache.test.js and test/helpers.js. Confirmed ListCache (src/cache.js) has no store.onChange hook, unlike AccountCache which self-invalidates on every insert/update to 'accounts'. openAccount (src/accounts.js:9-26) and closeAccount (src/accounts.js:46-53) never call listCache.forget; only transfer()/deposit() in src/transfers.js do. The GET /accounts handler (src/server.js:45-48) is the only reader of listCache, and POST /accounts (src/server.js:51-58) / POST /accounts/:id/close (src/server.js:64-73) never invalidate it. I reproduced both failures live against the running server: (1) created account A, GET /accounts (caches total=1), created account B, GET /accounts again immediately still returned total=1 with only A, even though POST /accounts for B succeeded with a real id. (2) created account B, GET /accounts (caches closed:false), closed B successfully (balance 0), GET /accounts again immediately still showed closed:false for B, while GET /accounts/:id correctly returned closed:true for the same account. Also confirmed test/list-cache.test.js's HTTP test creates both accounts before ever calling GET /accounts, so it never exercises a cached page being invalidated by an open or close, matching the claim's coverage gap. This gap did not exist before this diff (GET /accounts was uncached), so the diff introduces it. All seven cited sites describe this same real defect accurately; none are false.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Daily interest accrual changes balances without invalidating the list cache",
+      "file": "src/interest.js",
+      "line": 30,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "accrueInterest() (src/interest.js) changes every open account's balanceCents via store.update() without ever calling listCache.forget(), so GET /accounts can serve a stale pre-interest balance for up to ttlMs after the daily job runs \u2014 and the gap is not just a missing call: the job is run via `node scripts/run-jobs.mjs interest` as its own OS process, which gets its own fresh module instance of the listCache singleton (src/cache.js:56) with no IPC/shared memory to the live server, so it could not invalidate the server's live cache even if it tried, directly contradicting the PR's claimed guarantee that the list can never show a stale balance.",
+      "summary": "accrueInterest() updates balanceCents for every open interest-bearing account via store.update (src/interest.js:30) but never touches listCache, so GET /accounts can serve a stale, pre-interest balance for up to 30 seconds after the scheduled interest job runs - directly contradicting the PR's stated guarantee that 'the list can never show a stale balance'.",
+      "failure": "With a long-running server and the interest job run via `node scripts/run-jobs.mjs interest` (the only way it is ever invoked, per the README and scripts/run-jobs.mjs), accrueInterest() updates balanceCents in the job's own Store/process without calling listCache.forget, and the job's listCache is a separate singleton instance in a separate process anyway. Reproduced directly: GET /accounts caches balanceCents=100000; accrueInterest(store) runs and the account's true balance becomes 100054; a subsequent GET /accounts within the cache TTL still returns balanceCents=100000 (confirmed by live HTTP call against a real server instance), while GET /accounts/:id correctly shows 100054 via AccountCache's store.onChange invalidation. In the real deployment (separate OS process for the job, and the server's Store never reloaded from disk), this staleness is not even bounded to ttlMs -- it persists until the server process restarts.",
+      "sites": [
+        {
+          "file": "src/interest.js",
+          "line": 30,
+          "title": "Daily interest accrual changes balances without invalidating the list cache"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 22,
+          "title": "Daily interest job can never clear the live list cache"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "cross-process cache coherence for the interest job"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/cache.js, src/interest.js, src/transfers.js, src/server.js, src/store.js, scripts/run-jobs.mjs, docs/deploy.md. Confirmed: listCache.forget is only called from transfer()/deposit() in src/transfers.js; accrueInterest() (src/interest.js:22-35) mutates balanceCents via store.update (line 30) and never references cache.js. scripts/run-jobs.mjs is a separate CLI entry point/process from the long-running server, each getting its own module instance of the listCache singleton, with docs/deploy.md confirming multi-process operation against one ledger file is normal (not a contrived edge case). Store.load() runs only once at startup with no reload/watch mechanism anywhere in the codebase. I then reproduced the exact symptom live, in the single most favorable scenario for the PR (same process, same Store object, strictly better than real cross-process deployment): deposited 100000 cents, set a 2000bps rate, GET /accounts cached balanceCents=100000, called accrueInterest(store) directly (store becomes balanceCents=100054, confirmed via its return value {accounts:1,cents:54}), then GET /accounts again within the TTL window still returned the stale balanceCents=100000, while GET /accounts/:id (AccountCache, which listens on store.onChange) correctly returned 100054. This proves the list endpoint can serve a stale balance after interest accrual, directly contradicting the PR's stated guarantee, and no test (test/interest.test.js, test/list-cache.test.js) covers this interaction. The cross-process point is also correct and, if anything, means real-world staleness is unbounded (persists until server restart) rather than capped at ttlMs, since the live server's Store is never reloaded from disk independent of any caching -- so the claim is not overstated, if anything slightly understated.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "ListCache entries grow without bound or eviction",
+      "file": "src/cache.js",
+      "line": 27,
+      "category": "data-integrity",
+      "severity": "medium",
+      "rootCause": "ListCache.entries (src/cache.js) is a module-level Map with no cap, no LRU, and no proactive expiry sweep, keyed by `${ownerId}:${page}`, so it grows without bound as any signed-in user varies `?page=`, and forget()'s full-map key scan (invoked on every transfer/deposit) gets slower as the map grows.",
+      "summary": "ListCache.entries is a module-level Map keyed by `${ownerId}:${page}` with no cap, no LRU, and no proactive expiry sweep, so any signed-in user can grow it without limit simply by varying `?page=`, and forget()'s full-map scan (called on every transfer/deposit) gets slower as it grows.",
+      "failure": "Any authenticated member sends GET /accounts?page=1, ?page=2, ... up to arbitrarily large values; `listAccounts` has no upper bound on `page` (only `page >= 1, integer`), so each distinct value is accepted and cached as a new, permanent entry (entries are only ever overwritten on a repeat hit to the same key, or removed by forget() for a matching owner's entries \u2014 nothing removes entries for pages nobody revisits). Verified live: 2000 distinct `?page=` requests from one user produced exactly 2000 permanent entries in the process-global `listCache.entries` Map, which persists for the life of the server process and is never bounded. Because transfer() and deposit() call forget() synchronously before responding, and forget() does `for (const key of this.entries.keys())` over the whole map, every transfer/deposit for every user pays a cost proportional to how large any user has grown this shared map.",
+      "sites": [
+        {
+          "file": "src/cache.js",
+          "line": 27,
+          "title": "ListCache entries grow without bound or eviction"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/cache.js: ListCache.get keys solely on `${ownerId}:${page}` and unconditionally `this.entries.set(key, ...)` on every miss/expiry \u2014 nothing ever deletes an entry except forget(ownerId), which only fires on transfer/deposit for that specific owner. listAccounts (src/accounts.js) only validates `Number.isInteger(page) && page >= 1`, no upper bound, and the GET /accounts route (src/server.js) passes `Number(url.searchParams.get('page'))` straight through, reachable by any authenticated member via requireUser (src/auth.js) \u2014 no rate limiting anywhere in the app. Reproduced directly: calling `listCache.get('bob', i, ...)` for i=1..2000 produced exactly 2000 entries in the Map, confirming unbounded per-page growth; `forget('bob')` then iterates the full map via `for (const key of this.entries.keys())`, so its cost scales with total map size, not with the forgetting owner's own entry count. This is a genuine, reachable, newly-introduced resource-growth/performance issue, exactly as described.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    }
+  ],
+  "refuted": [
+    {
+      "title": "listCache is a process-wide singleton, not scoped to a Store",
+      "file": "src/cache.js",
+      "line": 56,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "listCache (src/cache.js:56) is instantiated once as a process-wide module singleton rather than per Store/server the way AccountCache is (new AccountCache(store, ...) inside createServer, src/server.js:129), so any two Store instances sharing a process (e.g. test/helpers.js's serve() across tests, or a future multi-store/multi-tenant setup) that ever reuse the same ownerId string would have one store's cached list served through the other's, since the cache is keyed only by `ownerId:page` with no store identity in the key.",
+      "summary": "`export const listCache = new ListCache()` (src/cache.js:56) is one Map shared by the whole process and keyed only by `ownerId:page`, unlike AccountCache which is instantiated fresh per Store inside createServer() and wired to that specific store's onChange (src/server.js:129); if two Store instances created in the same process (as test/helpers.js's serve() does across tests, or any future multi-store/multi-tenant use) ever assign the same ownerId string to different users, GET /accounts on one server can return a cached page computed from an entirely different store.",
+      "failure": "Verified with a standalone repro: two separate Store instances (A and B), each with a user whose id is literally 'owner-1' and one account each (A's balance 0, B's balance 999999), each served by its own createServer()/http.Server in the same Node process. Calling GET /accounts on server A first (caches key 'owner-1:1' with A's data), then immediately calling GET /accounts on server B returns A's cached list (account acc-A, balance 0) instead of B's own data (account acc-B, balance 999999) - server B's caller is handed another store's account entirely. The current newId() scheme (module-level counter + Date.now()) happens to avoid id collisions between freshStore() calls in today's test suite, so this doesn't currently fail any existing test, but nothing in ListCache's design prevents it, unlike the per-store-scoped AccountCache pattern already used elsewhere in this codebase.",
+      "sites": [
+        {
+          "file": "src/cache.js",
+          "line": 56,
+          "title": "listCache is a process-wide singleton, not scoped to a Store"
+        }
+      ],
+      "foundBy": [
+        "correctness"
+      ],
+      "preexisting": false,
+      "why": "The mechanism is correctly described (listCache is a bare module-level singleton keyed only by ownerId:page with no store identity), but the claimed failure requires two Store instances in one process to assign the same ownerId string. That cannot happen with the code as it stands: ids come from store.js's newId(), a module-level counter that only ever increments for the life of the process (never reset per Store), so every call to freshStore() \u2014 the only place in this codebase that creates more than one Store per process \u2014 produces strictly unique user ids across all stores created in that process. Production (src/server.js's bottom block) creates exactly one Store and one server per process; there is no multi-store/multi-tenant code path anywhere in the repo today. The finder's own repro manually assigns both users the literal string 'owner-1', which is not something any caller in this codebase does \u2014 they concede as much ('nothing in ListCache's design prevents it' rather than 'this happens'). This is a legitimate design-consistency observation (ListCache isn't scoped per-Store the way AccountCache is) but not a presently reachable defect, so the claimed failure as stated does not occur.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "dismissedAsUnsure": false
+    }
+  ],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/server.js's createServer({ cacheTtlMs }) doc comment says cacheTtlMs controls \"how long a read... is cached\", and it is wired into AccountCache (new AccountCache(store, { ttlMs: cacheTtlMs })) \u2014 but listCache is the pre-built module singleton from src/cache.js with its own hardcoded ttlMs=30_000, totally ignoring cacheTtlMs. Verified empirically: a server started with cacheTtlMs:0 (requesting always-fresh reads) still returned a stale GET /accounts total right after a direct store mutation. No test anywhere passes cacheTtlMs through serve()/createServer(), so this is completely untested. It also removes the one operational lever (shrinking the TTL) an operator has to limit exposure to the already-known open/close/interest staleness windows for the list endpoint specifically.",
+      "why": "None of the five run angles target a function's own configuration-option contract against an unchanged doc comment: data-integrity and cross-process-coherence look at missed invalidation call sites, correctness and boundary-contract read as request-input/behavior checks, and tests-that-dont-test was scoped to the new test file's own claims (cache expiry, per-owner forgetting, deposit/transfer), not to whether the pre-existing cacheTtlMs knob still means what its doc comment says once a second cache was added beside it."
+    },
+    {
+      "what": "listCache (src/cache.js) is a bare module-level singleton \u2014 unlike AccountCache, which createServer() deliberately constructs fresh per call, scoped to that call's store. Its key is only `ownerId:page`, with no store identity, and nothing (no teardown in createServer, no hook in close()) ever disposes or scopes it to one server/store instance. The README's 'Known limitations' documents the system as 'one process per ledger file' \u2014 an assumption this singleton quietly relies on without restating or enforcing it near the new code. The test suite itself violates that assumption constantly (many freshStore()+serve() pairs sharing one worker process in server.test.js and list-cache.test.js), staying correct today only because newId()'s timestamp+counter scheme never collides, not because the cache is actually isolated per store the way AccountCache is.",
+      "why": "This is a same-process, cross-instance scoping/lifecycle gap \u2014 the mirror image of, not a restatement of, the cross-process-cache-coherence angle that was run specifically for the interest job (a separate OS process). Data-integrity and correctness were aimed at missed-invalidation call sites within one store's lifecycle, not at whether the cache's own lifetime is tied to the store it reads from; and cache.js:27's 'unbounded growth' finding is about per-owner/page key explosion within one long-lived cache, a different consequence from a second store's requests being served out of a cache keyed with no store identity at all."
+    }
+  ],
+  "counts": {
+    "raw": 11,
+    "rootCauses": 4,
+    "merged": 0,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 3,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 1,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 15,
+    "scout": 1,
+    "finders": 5,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 7,
+    "critic": 1,
+    "retries": 0
+  }
+}

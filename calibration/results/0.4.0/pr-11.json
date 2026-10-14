@@ -1,0 +1,93 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "be23305b3c846e94b25272aaabde16aa55e3fc21",
+  "target": {
+    "prs": [
+      11
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No entry point is added or changed. POST /accounts/:id/export still runs through the same requireUser wrapper and getOwnAccount(store, user, id) ownership check as before; the diff only changes what exportTransfers writes into the CSV body, not who may trigger the write or how identity/ownership is derived."
+    },
+    {
+      "title": "security",
+      "why": "The only new value flowing into output is account.currency, which is never user-supplied at export time — it is fixed at account creation by openAccount() and restricted to CURRENCIES = ['AUD','NZD','USD']; there is no path to inject arbitrary text through it. transfer() also requires both fromId and toId to be owned by the caller (from.ownerId === user.id && to.ownerId === user.id), so exporting account A can never surface another user's data via the new column. csvCell (the only quoting/escaping logic) is untouched by this diff. No secrets, redirects, SQL/HTML context, or third-party calls are involved."
+    },
+    {
+      "title": "data-integrity",
+      "why": "exportTransfers reads the live in-memory store synchronously within one request and writes one file; this diff adds no caching, retry, or multi-store write. Nothing here is shared mutable state across requests that the diff could leave disagreeing."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "The `currency` field and its backfill migration (src/migrations/002-account-currency.js, additive, defaults missing currency to AUD) already existed in the prior baseline commit and are untouched by this PR. This diff adds no schema change, no migration, and no newly-persisted field — it only changes in-memory CSV formatting at export time. The only 'old format on disk' angle is static export files from past runs, which are fully overwritten on the next export, not a live schema a reader must stay compatible with."
+    },
+    {
+      "title": "silent-drops",
+      "why": "account.currency is read directly off the account record already fetched via getOwnAccount — it is not written to any new store key by this diff, so there is nothing for a schema/serializer to silently strip. The CSV file is the only sink, and I round-tripped it myself (see tests-that-dont-test note): the written value is read back exactly as written."
+    },
+    {
+      "title": "tests-that-dont-test",
+      "why": "I verified the new test is not vacuous by mutation: I temporarily replaced `account.currency` in src/export.js with a literal 'XXX' and reran test/server.test.js — 'each exported row carries the account's currency' failed with a clear mismatch against the expected NZD, while the other tests still passed. The updated pre-existing test ('an export lands...') is a plain string-equality check on the full header line, which would equally fail on a wrong/misordered header. File was restored and git status is clean afterward."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The diff adds a `currency` column to the transfers CSV export (src/export.js), sourced from the exported account and placed right after amountCents, with README and a new test updated to match. Currency is otherwise untouched in this PR: it was already a validated, immutable, enum-restricted account field (set only at openAccount, never updated), and transfer() already refuses to create a transfer row unless both legs share a currency, so account.currency is a sound proxy for every row's true currency.",
+  "confirmed": [],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The PR's own rationale ('a statement is readable on its own without needing the account record') is only half-delivered: GET /accounts/:id/transfers (src/server.js, via publicTransfer in src/serialize.js, lines 20-28) returns the identical transfer rows — same amountCents, same ambiguity — and was not touched by this diff, so it still omits currency. Anyone reading a statement through the JSON API instead of the CSV export hits the exact problem this PR claims to fix.",
+      "why": "Every angle that ran or was scoped (correctness, boundary-contract, security, data-integrity, silent-drops, etc.) evaluates the changed lines in export.js/server.js/test. None of them had a reason to open serialize.js, because the diff never touches it — the gap is a sibling endpoint built on the same transfers data that the PR's stated goal implicitly also applies to, which is only visible by reading the untouched code next to what changed, not the diff itself."
+    },
+    {
+      "what": "This PR branches from commit 89da56f, but the repository's actual main has since moved to 7fc1c3c ('Interest, webhooks and a read cache'), which independently appended two new tests at the end of test/server.test.js — the same file and same tail-of-file location this PR appends its own new test to. I confirmed with `git merge-tree --write-tree 7fc1c3c be23305` (read-only, no branch/commit change made) that merging produces a real CONFLICT in test/server.test.js, so this PR cannot land cleanly against current main as-is.",
+      "why": "Every angle, run or ruled out, reasons about the diff against its own parent commit; none of them compares the PR's fork point to the project's actual current trunk, because that is a question about git ancestry/mergeability, not about what the changed lines do. A content-focused review has no occasion to discover that the branch is stale and conflicts with code that landed on main after the PR was opened."
+    }
+  ],
+  "counts": {
+    "raw": 0,
+    "rootCauses": 0,
+    "merged": 0,
+    "confirmed": 0,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 4,
+    "scout": 1,
+    "finders": 2,
+    "triage": 0,
+    "sameSite": 0,
+    "skeptics": 0,
+    "critic": 1,
+    "retries": 0
+  }
+}

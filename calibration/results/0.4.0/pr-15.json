@@ -1,0 +1,188 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "cc2c253bb916c2bb8b2d0ec72193e33814194eef",
+  "target": {
+    "prs": [
+      15
+    ]
+  },
+  "angles": [
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "No new injection surface, secret, redirect, SSRF, or CORS change, and the one third-party egress point (webhooks.js) is untouched by this diff. The one place this PR could hand data to the wrong party is the idempotency cache-hit branch returning a stored response without re-checking who it belongs to - that is exactly authz-and-attribution's scope (sharpened below with a confirmed repro), so a separate generic security pass over the same four lines would add nothing new."
+    },
+    {
+      "title": "silent-drops",
+      "why": "SCHEMA.idempotency in src/store.js lists exactly the four fields remember() writes (id, status, body, createdAt); pick() strips nothing from that set, and remembered() reads all four back under the same names. publicTransfer()'s shape has no undefined/non-JSON-safe fields (memo defaults to '' before storage), so the cached body round-trips through JSON.stringify/parse intact. Verified by reading store.js's pick()/insert() and idempotency.js side by side: nothing written here is dropped or renamed."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds an Idempotency-Key path to POST /transfers: a new idempotency collection (additive migration 004) remembers the {status, body} of the first response under the raw header value, and a repeat with the same key short-circuits straight to that cached Reply before transfer() or any ownership check runs. Expired rows (24h TTL) are pruned lazily, in-place, inside the same lookup.",
+  "confirmed": [
+    {
+      "title": "Idempotency cache not scoped to the requesting user",
+      "file": "src/idempotency.js",
+      "line": 14,
+      "category": "authz",
+      "severity": "critical",
+      "rootCause": "remembered()/remember() in src/idempotency.js key the cached transfer response solely by the raw Idempotency-Key string (store.js SCHEMA.idempotency has no userId/ownerId or body/fingerprint field), with no check that the authenticated caller or the current request body matches what originally created the record, so a key collision across two different users returns one user's prior transfer response to the other (bypassing transfer()'s ownership checks, leaking account IDs/amount) and reusing a key with a different body on a retry silently replays the stale first response instead of performing or rejecting the newly requested transfer.",
+      "summary": "remembered() looks up a cached transfer response by the raw Idempotency-Key header value alone, with no binding to the authenticated user, and the stored row (see remember() at idempotency.js:19 and the SCHEMA at store.js:15) carries no userId/ownerId at all, so the POST /transfers cache-hit branch in server.js:89-93 returns another user's prior 201 response -- bypassing transfer()'s ownership checks entirely -- whenever two different users' requests happen to carry the same key value.",
+      "failure": "Verified by running a PoC: Bob (owns accounts A/B) POSTs /transfers with body {fromId:A,toId:B,amountCents:500} and header Idempotency-Key: shared-key-collision, getting 201 with {id:trf_x, fromId:A, toId:B, amountCents:500}. Cy -- a different, unrelated authenticated user who owns separate accounts C/D -- independently POSTs /transfers with a DIFFERENT body {fromId:C,toId:D,amountCents:999} but the SAME header value. Cy receives status 201 with a response body identical to Bob's (Bob's account ids as fromId/toId, Bob's transfer id, Bob's amount) -- data about accounts Cy does not own and was never authorized to see. Cy's own intended transfer of 999 cents never executes: a follow-up GET /accounts/C shows balanceCents unchanged, with no error returned to Cy indicating the write was dropped.",
+      "sites": [
+        {
+          "file": "src/idempotency.js",
+          "line": 14,
+          "title": "Idempotency cache not scoped to the requesting user"
+        },
+        {
+          "file": "src/idempotency.js",
+          "line": 14,
+          "title": "Idempotency key not scoped to user, leaks data"
+        },
+        {
+          "file": "src/idempotency.js",
+          "line": 14,
+          "title": "Idempotency key not scoped to user or body"
+        },
+        {
+          "file": "src/idempotency.js",
+          "line": 10,
+          "title": "Idempotency key not scoped to the caller"
+        },
+        {
+          "file": "src/server.js",
+          "line": 91,
+          "title": "Idempotency replay ignores request body mismatch"
+        },
+        {
+          "file": "src/idempotency.js",
+          "line": 14,
+          "title": "Idempotency key not scoped to user or request body"
+        }
+      ],
+      "foundBy": [
+        "authz-and-attribution",
+        "boundary-contract",
+        "tests-that-dont-test",
+        "correctness",
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/idempotency.js, src/server.js (POST /transfers handler), src/store.js (SCHEMA.idempotency = ['id','status','body','createdAt'] \u2014 no userId/ownerId/body-fingerprint field), src/auth.js (requireUser only authenticates, doesn't touch idempotency), and src/transfers.js (transfer() does the ownership check 'from.ownerId !== user.id', but that check is never reached on a cache hit because server.js returns `new Reply(first.status, first.body)` before calling transfer() at all). remembered() matches purely on `k.id === key` (the raw Idempotency-Key string) with zero binding to the authenticated user or to the request body. I then ran a concrete PoC against this worktree's checked-out PR head using the existing test/helpers.js freshStore()/serve() (which already seeds a third user tok-cy, unused by the PR's own test): Bob opened accounts A/B, was funded, and POSTed /transfers {fromId:A,toId:B,amountCents:500} with header 'idempotency-key: shared-key-collision', getting 201 with his transfer. The separate authenticated user Cy (owning unrelated accounts C/D, independently funded) then POSTed /transfers with a DIFFERENT body {fromId:C,toId:D,amountCents:999} but the SAME key value, and received status 201 with a body byte-for-byte identical to Bob's (Bob's trf id, Bob's account ids A/B, amountCents 500) \u2014 leaking account IDs and amounts Cy was never authorized to see. A follow-up GET /accounts/C as Cy showed balanceCents still 1000 (unchanged from the deposit), confirming Cy's intended 999-cent transfer silently never executed and no error was surfaced. All assertions (cyResp.body deepEquals bobResp.body, cyResp.body.fromId === Bob's account A, Cy's balance unchanged) passed, exactly matching the claimed PoC. The PR's own test (server.test.js) only reuses tok-bob across both calls on the same key, so it cannot and does not catch this cross-user collision \u2014 it is a blind test w.r.t. this defect, as claimed. The route, src/idempotency.js, src/migrations/004-idempotency.js, and the SCHEMA.idempotency entry are all new in this diff, so this is diff-introduced. I found no guard, caller-side scoping, or test anywhere in the codebase that prevents or narrows this \u2014 the claim holds exactly as stated, at severity CRITICAL (authz bypass + cross-tenant data leak + silent fund-transfer failure with no error returned).",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "Cache-hit path never retries or confirms durable save",
+      "file": "src/server.js",
+      "line": 91,
+      "category": "data-integrity",
+      "severity": "high",
+      "rootCause": "In the POST /transfers handler (src/server.js:94-97), remember() inserts the idempotency row (marking the transfer a successful 201) into the in-memory store before `await store.save()` has confirmed the mutation is actually persisted, and the cache-hit branch (server.js:90-92) never calls store.save() or retries persistence on replay, so if the original save() throws the client gets a 500 but the in-memory 'remembered' success record survives, and every subsequent retry with that key returns a fabricated 201 'success' without the data ever being durably saved or the save being re-attempted.",
+      "summary": "The idempotency cache-hit branch returns the remembered response immediately without ever calling store.save(), so once a key's record is committed only to memory (because the save on the original request failed), every retry keeps confidently returning 201 for a transfer that is not actually durable, instead of retrying the save or signalling the problem.",
+      "failure": "With Idempotency-Key 'k-save-fail': POST /transfers mutates balances/transfer row and inserts an idempotency row into the in-memory store, then store.save() throws (e.g. transient disk error) and the client correctly receives 500, while ledger.json on disk has 0 transfer rows and 0 idempotency rows. A same-key retry hits the cache-hit branch (server.js:90-92), finds the never-persisted in-memory record, and returns a confident 201 with a real transfer id -- without calling store.save() or retrying persistence -- while the on-disk ledger still has 0 rows for both collections. Every further retry repeats this fabricated confirmation; nothing in the code path retries the save or surfaces the durability gap, so a process crash/restart before some unrelated successful save flushes the dirty in-memory state would permanently leave the client holding a confirmed transfer that never existed in the durable ledger.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 91,
+          "title": "Cache-hit path never retries or confirms durable save"
+        },
+        {
+          "file": "src/server.js",
+          "line": 96,
+          "title": "Idempotency cache records success before the save that would make it true"
+        }
+      ],
+      "foundBy": [
+        "data-integrity",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js:86-100, src/idempotency.js, src/store.js, and src/transfers.js to confirm transfer() and remember() mutate the in-memory store synchronously (store.update/store.insert push into this.data directly), independent of save(). Then reproduced the exact scenario in the actual worktree: wrapped store.save to throw on only the first invocation, POSTed /transfers with Idempotency-Key 'k-save-fail'. Result: first call returns 500 (as expected, since save threw) while ledger.json on disk has 0 transfer rows and 0 idempotency rows (confirming the mutations only live in memory). A retry with the same key then hits the cache-hit branch (server.js:90-92), which returns a fabricated 201 with a real-looking transfer id, and never calls store.save() or retries persistence -- ledger.json on disk is still 0 rows for both collections even after the 'successful' retry. This is exactly the claimed failure, reproduced end-to-end, not merely plausible from reading. The behavior is new in this diff: idempotency.js and its wiring into the POST /transfers handler (the remember-before-confirmed-save pattern and the no-retry cache-hit branch) did not exist before this PR; a non-idempotent resend would simply re-run transfer() and attempt its own save rather than short-circuiting to stale in-memory state.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/server.js:88-97 and src/idempotency.js:29-34 \u2014 the idempotency cache keys solely on the header string, with no comparison against the stored request's body. Confirmed by running the server: reusing the same Idempotency-Key for a second, different transfer (A->C/300 after A->B/100) returns 201 with the FIRST transfer's data (toId=B, amountCents=100) while account C's balance stays 0 \u2014 the second transfer is silently dropped and the response doesn't even describe the request that was sent. This is distinct from the already-reported cross-user leakage in idempotency.js:14: even with per-user scoping fixed, a same user reusing a key across two different transfers (key-gen bug, a retrying proxy/queue that mutates the payload under an unchanged dedup key) loses the second operation with no error signal.",
+      "why": "authz-and-attribution's finding is about the lookup not being scoped to the requesting user (cross-user leakage); it doesn't cover same-user key reuse with a different payload, which is a request-fingerprinting gap, not an identity-scoping one. data-integrity's finding (server.js:91) is about durable save on the cache-hit path, not about whether the cached entry matches the new request at all. boundary-contract was run but produced no finding here even though this is squarely a contract-validation gap; silent-drops was ruled out on schema round-tripping grounds, which is a different question from whether the right transfer gets stored under a reused key. None of the six angles, as actually executed, produced a finding about key-to-request binding."
+    },
+    {
+      "what": "The cache-hit early-return in src/server.js:88-93 never reaches notify('transfer.created', response) on line 95. src/webhooks.js already retries a failed delivery only 3 times total (1s/5s backoff) then gives up and logs a warning (delivery is not guaranteed). Before this PR, a client retry of a failed/unanswered POST would (incorrectly) double-move money, but it also gave the webhook pipeline a fresh delivery attempt. After this PR, the exact retry path the feature is designed to encourage short-circuits before notify() runs, so any transfer whose original 3 webhook attempts exhausted (e.g. receiver down for the ~6s window) has no further delivery path at all \u2014 not even through the client's own natural retries.",
+      "why": "The scout ruled out a security pass over webhooks.js because the file itself is untouched by the diff, but that reasoning only covers direct edits to that file, not a behavioral interaction introduced by server.js's new early-return against webhooks.js's existing retry-then-give-up semantics. correctness and data-integrity were scoped to the transfer/money-movement path and its own durability (hence the server.js:91 finding about store.save()), not to the separate notify() side effect that the same early-return also skips. No angle's description mentions webhooks.js at all, so this cross-file consequence of the commit was never in scope for any of the six passes."
+    }
+  ],
+  "counts": {
+    "raw": 8,
+    "rootCauses": 2,
+    "merged": 0,
+    "confirmed": 2,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 16,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "sameSite": 1,
+    "skeptics": 6,
+    "critic": 1,
+    "retries": 0
+  }
+}

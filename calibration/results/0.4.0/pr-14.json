@@ -1,0 +1,221 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "0bf23917ade72ebeb93704c555a8504baff245e7",
+  "target": {
+    "prs": [
+      14
+    ]
+  },
+  "angles": [
+    {
+      "title": "day-boundary idempotency (the PR's central claim)",
+      "source": "scout"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No new HTTP route, tool, or user-facing entry point is added. The hourly timer is internal to the server process (not reachable by any request) and already records the write as actor `system` via the same `record(store, 'system', 'interest', account.id)` call the prior daily job used \u2014 unchanged attribution pattern. No client-supplied identity or clock reaches this path (the `clock` param is a test-only seam, never read from a request)."
+    },
+    {
+      "title": "security",
+      "why": "No new injection surface, no secrets, no new outbound call, no CORS/redirect change. The only new code is a local Date computation and an in-process timer; webhooks.js and its signing are untouched by this diff."
+    },
+    {
+      "title": "silent-drops",
+      "why": "`lastAccruedOn` is added to `SCHEMA.accounts` (src/store.js) in the same change that starts writing it, so `pick()` keeps it on both `insert` and `update`; it is read back by the same function (`account.lastAccruedOn` in src/interest.js) under the exact name it was written. Verified by reading store.js's pick/update and interest.js side by side; no serializer strips it (publicAccount intentionally omits it, but that's display-layer, not storage)."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR moves interest accrual from an operator-run daily cron into an hourly setInterval inside the server process, adding a `lastAccruedOn` column (migration 004) so an account already credited 'today' is skipped. It injects a `clock` for testability and deletes the README's 'not safe to run twice' limitation, claiming the idempotency problem is now resolved.",
+  "confirmed": [
+    {
+      "title": "lastAccruedOn gate compares local day to stored UTC day",
+      "file": "src/interest.js",
+      "line": 23,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "accrueInterest's once-a-day skip guard compares a locally-computed calendar day (dayOf(clock()), via toLocaleDateString) against a UTC calendar day persisted and re-read as lastAccruedOn (at.slice(0,10) of clock().toISOString()), so on any non-UTC host the two 'day' values disagree for part of every day \u2014 defeating the idempotency guard the PR claims to add (and the added test only pins the clock to noon UTC, an instant where local and UTC days happen to agree, so it never exercises this mismatch).",
+      "summary": "accrueInterest derives `today` from the host's local timezone (`dayOf` uses `toLocaleDateString`) but persists and later re-reads `lastAccruedOn` as the UTC calendar day (`clock().toISOString().slice(0,10)`), so on any host whose local timezone differs from UTC the two values disagree for part of every day and the once-a-day gate fails.",
+      "failure": "On any server process whose local timezone offset from UTC is non-zero (no TZ is pinned anywhere in the repo, Dockerfile, or docs), the hourly accrueInterest() job re-credits the same account multiple times per calendar day because dayOf(clock()) (local-timezone day) is compared against lastAccruedOn (persisted as the UTC day via clock().toISOString().slice(0,10)). Verified by running the real code: under TZ=Australia/Sydney (UTC+11), a single open, rate-bearing account was credited interest 12 times within a single UTC calendar day on two consecutive days, instead of once; under TZ=Pacific/Kiritimati (UTC+14) the PR's own added idempotency test (which calls accrueInterest twice with the identical clock) fails, returning {accounts:1, cents:13} on the second call instead of the asserted {accounts:0, cents:0}.",
+      "sites": [
+        {
+          "file": "src/interest.js",
+          "line": 23,
+          "title": "lastAccruedOn gate compares local day to stored UTC day"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 30,
+          "title": "Local-day vs UTC-day mismatch re-accrues interest hourly"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 16,
+          "title": "Interest job over-accrues outside UTC"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 25,
+          "title": "lastAccruedOn stores UTC day, compared against local day"
+        },
+        {
+          "file": "src/interest.js",
+          "line": 35,
+          "title": "Local-day check vs UTC-day write defeats dedup"
+        },
+        {
+          "file": "test/interest.test.js",
+          "line": 133,
+          "title": "New idempotency test only exercises a TZ-safe instant"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "boundary-contract",
+        "data-integrity",
+        "day-boundary idempotency (the PR's central claim)",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/interest.js: `dayOf = (date) => date.toLocaleDateString('en-CA')` (line 16) computes the host-local calendar day, used as `today` (line 25) in the guard `if (account.lastAccruedOn === today) continue` (line 30). But the persisted/compared value is written at line 35 as `at.slice(0, 10)` where `at = clock().toISOString()` (line 24) \u2014 a UTC calendar day. I reproduced the failure by running the real accrueInterest/Store/openAccount/deposit/setInterestRate against a real rate-bearing account, invoking accrueInterest once per simulated hour for 48 hours with TZ=Australia/Sydney (via an injected clock), exactly as the server's setInterval does (src/server.js:101-104 calls accrueInterest(store) with no clock override, so production uses OS-local time). Result: 24 credits over 48 hourly ticks instead of 2 \u2014 12 credits on 2026-01-02 (ticks 0, 13-23) and 12 on 2026-01-03 (ticks 24, 37-47), matching the claim's '12 of the 24 hourly ticks each day' exactly. I also ran it with TZ=America/New_York and got 5 extra credits on the first day (ticks 0-4, UTC 00:00-04:00) before settling into correct once-daily behavior at tick 29 \u2014 matching the claim's second scenario exactly. Confirmed test/interest.test.js's new test pins clock to '2026-03-02T12:00:00.000Z' (noon UTC), where local and UTC day agree for essentially all real timezones, so the added test cannot catch this. The gate, the dayOf function, and the write are all new code introduced by this diff.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Hourly in-process save auto-clobbers concurrent writes",
+      "file": "src/server.js",
+      "line": 161,
+      "category": "data-integrity",
+      "severity": "high",
+      "rootCause": "The new setInterval in src/server.js unconditionally runs accrueInterest(store) + a full-file store.save() every hour for the life of every server process, turning the documented brief/operator-controlled deploy-overlap window into a continuous, automatic last-write-wins clobber of concurrent writes.",
+      "summary": "The new setInterval unconditionally runs accrueInterest(store) + store.save() (a whole-file overwrite) every hour for the lifetime of every server process, turning the documented 'two copies can run against one file during a deploy' window (docs/deploy.md:9) into an automatic, unbounded, recurring last-write-wins clobber instead of the brief, operator-controlled, once-a-day external job it replaces.",
+      "failure": "Two Store instances opened against the same ledger file (e.g. old and new copies overlapping during a deploy, or a straggling/zombie old copy that has stopped serving traffic but is still alive): process A performs a real write (a deposit, balance 1000 -> 5000) and saves; process B's independent hourly timer then fires accrueInterest(B.store) + B.store.save() against B's stale in-memory snapshot (still 1000), unconditionally overwriting the file back to balanceCents: 1000 even when accrueInterest credited nothing that tick \u2014 silently erasing A's deposit with no error raised, since store.save()'s only error path is a failed write, not a stale read.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 161,
+          "title": "Hourly in-process save auto-clobbers concurrent writes"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "PLAUSIBLE",
+      "reasoning": "Read src/server.js:160-165: the new setInterval unconditionally calls accrueInterest(store) then store.save() every hour for the life of the process, with no leader election, no lock, and no staleness check \u2014 store.save() (src/store.js) is a blind JSON.stringify of the in-memory `this.data` with no version/ETag comparison, and it runs even when accrueInterest credited zero accounts (result is discarded). docs/deploy.md:9 confirms 'Two copies can run against one file during a deploy' is an explicitly anticipated operational mode of this system, not user error, so the scenario of two concurrently-open Store instances against one ledger file is reachable without violating any guard the code or docs otherwise enforce. The lastAccruedOn idempotency this PR adds only prevents double-crediting interest from one store's own perspective; it does nothing to prevent a second, stale Store's save() from clobbering a write (e.g. a deposit) made by another process in the meantime, since lastAccruedOn travels with the stale snapshot too. I reproduced the exact mechanism directly against this worktree's code: opened two Store instances on one file (storeA, storeB), had storeA record a deposit (balance 1000->5000, saved and confirmed on disk), then ran accrueInterest(storeB, {clock}) against B's stale snapshot (still 1000) and storeB.save(); the on-disk balance silently reverted to 1000, erasing A's deposit, with no exception thrown anywhere (store.save()'s only .catch fires on an actual write/rename failure, never on staleness). Before this diff, the only writer that could race across two Store instances in this way was traffic-driven (deposit/transfer/etc. handlers) or an operator manually invoking scripts/run-jobs.mjs interest \u2014 both require either real user traffic landing in the brief overlap window or deliberate operator action. This diff adds a writer that needs neither: a retiring/zombie old-copy process that has stopped receiving traffic (e.g. still finishing a graceful shutdown, or stuck) keeps ticking and saving every hour purely because the process is still alive, which is a genuinely new, automatic exposure of the pre-existing blind-overwrite primitive. The claim's mechanism, reproduction, and severity (silent data loss, no error path) all hold up under direct testing.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "2 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Old binary's writes silently erase lastAccruedOn mid-deploy",
+      "file": "src/store.js",
+      "line": 91,
+      "category": "migrations-and-rollout",
+      "severity": "high",
+      "rootCause": "store.update()/pick() keeps only the keys listed in the running binary's own SCHEMA, so an old (pre-PR) binary running concurrently during a rollout (per docs/deploy.md) silently strips the new lastAccruedOn field from any account row it writes for an unrelated reason, defeating the double-accrual guard this PR relies on.",
+      "summary": "An old (pre-PR) server binary, which this repo's own deploy contract says may run concurrently with the new one during a rollout, strips the new `lastAccruedOn` field from any account row it touches for an ordinary reason (deposit, transfer, close, rate change) \u2014 defeating the double-accrual guard this PR relies on.",
+      "failure": "During the documented rollout overlap (docs/deploy.md: 'Two copies can run against one file during a deploy'), a pre-PR server instance still draining traffic performs any ordinary account write (deposit, transfer, close, interest-rate change) on an account whose lastAccruedOn was already set by the new code/migration. Because store.update() rebuilds the row via pick() filtered by that old process's own (pre-PR) SCHEMA.accounts list \u2014 which has no lastAccruedOn entry \u2014 the field is dropped from the row entirely (verified by direct execution against the actual pre-PR store.js), and the old process's subsequent store.save() persists that row (or, since save() serializes the whole file, potentially a broader lost-update of the shared file) without lastAccruedOn. The next hourly accrual run then sees `account.lastAccruedOn === today` as false (undefined !== today) and credits interest on that account again the same day \u2014 the double-accrual this PR claims to have eliminated.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 91,
+          "title": "Old binary's writes silently erase lastAccruedOn mid-deploy"
+        }
+      ],
+      "foundBy": [
+        "migrations-and-rollout"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Verified end-to-end against the real code in the worktree. docs/deploy.md explicitly states the project's rollout contract: 'Two copies can run against one file during a deploy,' and spells out exactly this mechanism: 'The store's SCHEMA lists what each collection keeps; a write carrying a key not in it stores nothing for that key.' I confirmed store.update() (src/store.js:91) does `rows[index] = pick(collection, { ...rows[index], ...patch })`, and pick() (src/store.js:18-24) loops only over the calling process's own module-level SCHEMA.accounts key list, assigning output keys from that fixed list regardless of what extra keys the input row carries. I replayed this exactly: built a row that already has lastAccruedOn set (as it would be after migration 004 or an hourly credit), ran it through an 'old' pick/SCHEMA (the pre-PR accounts key list, without lastAccruedOn) with an ordinary unrelated patch (a balance change, as deposit/transfer would produce), and confirmed the key lastAccruedOn is absent from the result object (not null \u2014 truly deleted). I also checked the real callers: closeAccount (src/accounts.js:50), setInterestRate (src/accounts.js:63), transfer (src/transfers.js:26-27), and deposit (src/transfers.js:47-50) all call store.update() with patches that do not carry lastAccruedOn, relying on the row-merge to preserve it \u2014 which only happens if the running binary's SCHEMA constant lists the key. An old binary's module-level SCHEMA constant is fixed pre-PR code and has no such entry, so any of these ordinary, routine operations performed by an old instance during the documented overlap window strips the field from that account's row. src/interest.js's new guard (`if (account.lastAccruedOn === today) continue`) then treats that account as not-yet-credited-today (undefined !== today), so the next hourly run (new code) credits it again \u2014 reproducing the exact double-accrual the PR's title and the deleted README line claim to fix. No version-gating, file-locking, or any other guard exists anywhere in store.js/server.js that would prevent two differently-versioned binaries from both operating on the same file, consistent with the deploy doc's explicit statement that this is intended/expected during a rollout. I found no caller, guard, type-check, or test that would prevent this path; the project's own documented deploy contract is the thing that makes it reachable, not a hypothetical. The claim's described failure stands as stated, at its one cited site.",
+      "verifiedBy": [
+        "refute:p3.1",
+        "refute:p3.2",
+        "refute:p3.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "No catch-up for a calendar day the server is entirely down for. `dailyInterest` always credits a flat one day's worth (src/interest.js:10-13), and the trigger is now an in-process `setInterval` tied to the app's own uptime (src/server.js:161-165) rather than the previous external, decoupled scheduler. A deploy, crash loop, or incident that keeps the server down across a local midnight with no tick silently and permanently drops that day's interest for every account \u2014 no backfill, no log, no alert distinguishing 'nothing to accrue' from 'never ran'. The PR's stated intent ('operators no longer have to configure an external scheduler') doesn't acknowledge that it traded a more durable trigger for a less durable one.",
+      "why": "Every listed angle (day-boundary idempotency, correctness, boundary-contract, tests-that-dont-test, data-integrity, migrations-and-rollout) examines the code as written and asks whether running it is safe/correct; none asks what happens when the new trigger mechanism simply never fires for a whole day, because that's a property of the *scheduling architecture* (external cron vs. in-process timer tied to process liveness) compared against the PR's own claimed benefit, not a property visible in any single changed line."
+    },
+    {
+      "what": "A failed `store.save()` after a successful in-memory `accrueInterest` is only logged, never rolled back (src/server.js:162-164). Because the new skip gate (src/interest.js:30) reads the in-memory `lastAccruedOn` that was already advanced before the save attempt, a transient save failure leaves the process believing an account was credited that day when nothing durable happened. If the process restarts or crashes before any later successful save flushes the shared in-memory state, that day's credit is permanently lost from disk with no trace in the audit log.",
+      "why": "This requires tracing three files together at once \u2014 interest.js's gate semantics, server.js's swallowed-error handling, and store.js's mutate-before-persist save() \u2014 to see that the new day-keyed gate silently assumes memory and disk never diverge. Each angle's remit (idempotency, migrations, data-integrity-as-schema) looks at one of those files' changed lines in isolation and would not connect a save() rejection to a permanent loss two files away."
+    },
+    {
+      "what": "README.md's quickstart block (line 10, untouched by this diff) still instructs operators to run `scripts/run-jobs.mjs interest` with an external daily scheduler, directly contradicting the updated section 39 lines later in the same file (and the deleted 'not safe to run twice' limitation) that says the server now does this hourly itself. An operator who only reads the quickstart has no signal to retire their cron entry, so the two-scheduler situation this PR is meant to make unnecessary during a brief deploy window can instead persist indefinitely.",
+      "why": "The migrations-and-rollout angle was scoped to the binary/schema rollout window (old binary vs. new binary racing on disk), not to whether the prose documentation in the same file is internally consistent with the feature's own claimed resolution \u2014 a documentation-accuracy gap that sits outside every angle's code-correctness framing."
+    }
+  ],
+  "counts": {
+    "raw": 8,
+    "rootCauses": 3,
+    "merged": 0,
+    "confirmed": 2,
+    "plausible": 1,
+    "corrected": 3,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 18,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 9,
+    "critic": 1,
+    "retries": 0
+  }
+}

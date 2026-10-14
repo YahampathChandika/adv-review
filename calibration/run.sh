@@ -3,7 +3,11 @@
 # Claude Code session inside a clone of the fixture, the result written by the skill's
 # --out into a results folder.
 #
-#   calibration/run.sh <clone> <results-dir> <pr> [<pr>...]
+#   calibration/run.sh <clone> <results-dir> <target> [<target>...]
+#
+#   a target is a PR number, or branch:<ref> to review a branch with no pull
+#   request against origin/main (BASE overrides); its result is
+#   branch-<ref>.json, which the scorer does not read
 #
 #   <clone>        a clone of the fixture on main, with its GitHub origin; gh must be
 #                  signed in to github.com (the skill resolves PRs with it)
@@ -38,24 +42,40 @@ command -v gh >/dev/null || { echo "gh is required" >&2; exit 2; }
 
 results_in() { grep -c '"type":"result"' "$1" 2>/dev/null || echo 0; }
 
-for pr in "$@"; do
-  out="$results/pr-$pr.json"
-  log="$results/logs/pr-$pr.jsonl"
+for target in "$@"; do
+  case "$target" in
+    branch:*)
+      ref="${target#branch:}"
+      slug=$(printf %s "$ref" | tr '/' '-')
+      out="$results/branch-$slug.json"
+      log="$results/logs/branch-$slug.jsonl"
+      prompt="/adv-review:review --branch $ref --base ${BASE:-origin/main} --no-post --model $MODEL --out $out"
+      name="branch $ref"
+      ;;
+    *)
+      out="$results/pr-$target.json"
+      log="$results/logs/pr-$target.jsonl"
+      prompt="/adv-review:review $target --no-post --model $MODEL --out $out"
+      name="PR #$target"
+      ;;
+  esac
   : > "$log"
   start=$(date +%s)
-  echo "=== PR #$pr start $(date -u +%FT%TZ) [$LANE]" | tee -a "$progress"
+  echo "=== $name start $(date -u +%FT%TZ) [$LANE]" | tee -a "$progress"
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/advcal.XXXXXX"); mkfifo "$fifo"
-  (cd "$clone" && claude -p --input-format stream-json --output-format stream-json --verbose \
+  # exec, so $! is the Claude process itself: killing a wrapper shell instead left
+  # every session of the first three passes running, 45 of them, for hours.
+  (cd "$clone" && exec claude -p --input-format stream-json --output-format stream-json --verbose \
       --plugin-dir "$PLUGIN" --model "$SESSION_MODEL" --permission-mode auto < "$fifo" > "$log" 2>&1) &
   pid=$!
   exec 3>"$fifo"
   python3 -c 'import json,sys; print(json.dumps({"type":"user","message":{"role":"user","content":sys.argv[1]}}))' \
-    "/adv-review:review $pr --no-post --model $MODEL --out $out" >&3
+    "$prompt" >&3
   # The reporting turn is the second one: the first launches the workflow and ends.
   while kill -0 "$pid" 2>/dev/null; do
     if [ -s "$out" ] && [ "$(results_in "$log")" -ge 2 ]; then break; fi
     if [ $(( ($(date +%s) - start) / 60 )) -ge "$MAX_MIN" ]; then
-      echo "=== PR #$pr: no result after $MAX_MIN min — stopping [$LANE]" | tee -a "$progress"; break
+      echo "=== $name: no result after $MAX_MIN min — stopping [$LANE]" | tee -a "$progress"; break
     fi
     sleep 10
   done
@@ -63,7 +83,11 @@ for pr in "$@"; do
   rm -f "$fifo"
   # Closing stdin ends the session after its current turn; bound the wait.
   waited=0; while kill -0 "$pid" 2>/dev/null && [ $waited -lt 12 ]; do sleep 10; waited=$((waited+1)); done
-  kill -0 "$pid" 2>/dev/null && kill "$pid"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid"
+    sleep 5
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid"
+  fi
   wait "$pid" 2>/dev/null
-  echo "=== PR #$pr done after $(( ($(date +%s) - start) / 60 )) min; result: $([ -s "$out" ] && echo present || echo MISSING) [$LANE]" | tee -a "$progress"
+  echo "=== $name done after $(( ($(date +%s) - start) / 60 )) min; result: $([ -s "$out" ] && echo present || echo MISSING) [$LANE]" | tee -a "$progress"
 done

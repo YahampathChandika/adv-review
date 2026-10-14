@@ -1,0 +1,187 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "15dd7c4aaa0be03d4171fb77b94b233d29f75046",
+  "target": {
+    "prs": [
+      2
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "control-character-definition-completeness",
+      "source": "scout"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No new entry point is added; transfer() still checks from.ownerId/to.ownerId against the caller and still records actorId: user.id exactly as before the diff. The change is confined to memo handling inside the already-authorized flow."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No concurrency, caching, or multi-store consistency path is touched \u2014 the write path (store.update/store.insert for balances and the transfer row) is unchanged from baseline; this diff only adds a string transform before the existing single insert."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No file under src/migrations/ is touched, no column or schema shape changes, and nothing about deploy ordering or old/new code-data compatibility is affected."
+    },
+    {
+      "title": "security",
+      "why": "The control characters ARE still removed from the memo before it is written to the store, so the CSV-corruption problem the PR describes (a newline or NUL landing in the export) is actually prevented regardless of which response code comes back. No new injection, secret exposure, redirect, CORS, or third-party-data-sharing surface is introduced; the only consequence of this diff is a response-contract mismatch, which correctness/boundary-contract already cover."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR claims to make transfer() refuse a memo containing a control character with a 400 error (per its title and the README line it adds), but src/transfers.js actually does `memo = memo.replace(CONTROL, '')` and falls through to a normal successful transfer instead of throwing. The single new test wraps the call in try/catch with no assertion that an exception occurs, so it passes whether or not any refusal ever happens \u2014 confirmed by running `node --test test/transfers.test.js` alone, which passes all 7 tests including this one, even though no HttpError is thrown for the control-character case.",
+  "confirmed": [
+    {
+      "title": "Control-character memo is sanitized, not refused with 400",
+      "file": "src/transfers.js",
+      "line": 20,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "transfer() never refuses a control-character memo with 400 as the PR's title/README/tests claim \u2014 it only silently strips control characters via memo.replace(CONTROL, '') and proceeds to succeed; this same missing-rejection-guard also lets an all-control-character memo (whose length is checked before stripping) silently collapse to the empty string and be stored, and the new regression test for this feature puts its only assertion inside a catch block with no assert.throws/fail on the non-throwing path, so it passes regardless of whether the guard exists.",
+      "summary": "transfer() strips control characters out of memo with `memo.replace(CONTROL, '')` and then proceeds to complete the transfer successfully, instead of throwing the HttpError(400) that the PR's title, stated intent, and new README line (\"A memo ... with a control character in it is refused with 400\") all say it does.",
+      "failure": "transfer(store, user, { fromId, toId, amountCents: 1, memo: 'rent \\n' }) does not throw at all under the PR's shipped code: it returns a transfer row with memo silently rewritten to 'rent ' (control char stripped, no error), and POST /transfers returns 201 with that mutated memo via publicTransfer \u2014 never a 400. Separately, memo: '\\n\\n\\n' (passes the pre-strip length check) collapses to memo: '' and is stored, again with no error. The only added test, test/transfers.test.js:71-78, asserts only inside a catch block that is never reached, so `npm test` is green independent of whether any refusal guard exists.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control-character memo is sanitized, not refused with 400"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control characters are stripped, never refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 16,
+          "title": "Memo with control char is stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control characters stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 17,
+          "title": "Memo of only control characters silently becomes an empty string"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "Blind test can't detect missing 400 refusal"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "tests-that-dont-test",
+        "boundary-contract",
+        "silent-drops"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Checked out 15dd7c4, read src/transfers.js (lines 13-21): the memo block throws HttpError(400) only for non-string or over-length memos; a string memo containing control characters falls through to `memo = memo.replace(CONTROL, '')` and the transfer completes normally. Directly executed the checked-out code: transfer(store, member, {..., memo: 'rent \\n'}) returned normally with row.memo === 'rent ' (newline stripped, no throw); transfer(..., {memo: '\\n\\n\\n'}) also returned normally with row.memo === '' (all-control memo passes the pre-strip length check, then collapses to empty string and is stored) -- confirming both the main claim and the all-control sub-claim. Traced the HTTP path: POST /transfers (src/server.js:80-87) calls transfer(store, user, body) and on success returns created(publicTransfer(row)) i.e. HTTP 201 -- grep for 'control'/'CONTROL' across src/ and test/ shows no other guard exists anywhere in the codebase. Ran `npm test`: all 23 tests pass, including the new test at test/transfers.test.js:71-78, which wraps the transfer() call in try{...}catch(err){assert.match(...)} with no assertion in the try body and nothing after the try/catch -- since transfer() never throws, the catch never runs and the test is a tautology that passes regardless of whether the refusal exists. README.md:46 claims the memo 'is refused with 400', which the shipped code contradicts. All 6 cited sites (transfers.js:16,17,20 and test/transfers.test.js:71) point into this exact verified block and test; none are false. This logic block was added by this diff (the prior code had only the length/type throw, no CONTROL regex or replace), so introducedByDiff is correctly true.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "CONTROL regex misses C1 and LS/PS control chars",
+      "file": "src/transfers.js",
+      "line": 7,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "The shared definition of 'control character' (the CONTROL regex in transfers.js, and independently csvCell's escaping regex in export.js) is incomplete \u2014 it misses C1 controls like NEL (U+0085) and the Unicode LINE/PARAGRAPH SEPARATORs (U+2028/U+2029), so these characters pass through memo validation untouched and reach the CSV export unescaped, a defect that persists even once the strip-vs-refuse behavior is fixed.",
+      "summary": "CONTROL (`/[\\x00-\\x1f\\x7f]/g`) only covers ASCII C0 controls and DEL, so C1 controls (U+0080-U+009F, e.g. NEL U+0085) and the Unicode LINE SEPARATOR/PARAGRAPH SEPARATOR (U+2028/U+2029) pass through memo handling untouched, and export.js's csvCell (only quotes on '\"', ',', '\\n') does not escape them either, so they reach the exported CSV raw and unescaped.",
+      "failure": "A memo of 'rent' + U+0085 (or U+2028, or U+2029) + 'bill' is accepted unchanged by transfer() (CONTROL regex only strips \\x00-\\x1f and \\x7f) and the raw, unescaped UTF-8 bytes for that character land in the CSV memo cell (csvCell's quoting trigger is only '\"', ',', '\\n'). A consumer that treats the file as Unicode text and splits lines via Unicode line-breaking rules (e.g. Python's str.splitlines() on the full file text) sees that row split into two 'lines', inflating the apparent row count \u2014 reproduced directly. Consumers that parse the file as CSV properly (Python's csv module, or plain line-by-line file iteration) are not affected by this specific character class, since none of these treat U+0085/2028/2029 as line terminators.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 7,
+          "title": "CONTROL regex misses C1 and LS/PS control chars"
+        }
+      ],
+      "foundBy": [
+        "control-character-definition-completeness"
+      ],
+      "preexisting": false,
+      "verdict": "PLAUSIBLE",
+      "reasoning": "Read src/transfers.js and src/export.js, then ran the real transfer()/exportTransfers() code in-process with memos containing U+0085 (NEL), U+2028 (LS), and U+2029 (PS). CONTROL = /[\\x00-\\x1f\\x7f]/g does not match any of these three code points (confirmed: transfer() returned the memo with codepoints 0x85/0x2028/0x2029 intact, no HttpError). exportTransfers()'s csvCell only quotes a cell when it contains '\"', ',', or '\\n' (ASCII LF) \u2014 it does not test for these characters \u2014 and the resulting CSV's hex dump showed the raw UTF-8 bytes (c2 85 / e2 80 a8 / e2 80 a9) sitting unescaped in the memo field, exactly as claimed. I also reproduced the specific line-count-inflation mechanism named in the claim: a 4-line CSV (header + 3 rows, each containing one of these chars) read back with Python's str.splitlines() gives 7 'lines' instead of 4, because splitlines() treats NEL/LS/PS as line breaks \u2014 matching the claim's described scaling pattern. This is newly reachable via this diff: pre-diff there was no control-character concept in memo handling at all; post-diff the new CONTROL regex/README rule creates an explicit (but incomplete) promise that control characters can't reach the export, which these three characters bypass. I could not refute the core mechanism. One nuance found while trying to kill it: the standard/idiomatic ways of reading a CSV in Python \u2014 plain line iteration over an open file, and csv.reader (opened with newline='') \u2014 are UNAFFECTED by LS/PS/NEL; both returned the correct 4 rows. Only reading the whole file into a string and calling the string method .splitlines() (not a CSV-aware reader) exhibits the corruption. Byte-oriented tools (wc -l, awk, grep -c) are also unaffected since they key on literal 0x0A, not Unicode line-breaking semantics. So the claim is correct in its literal, specific illustration and in the underlying code-completeness gap, but 'reaching... many Unicode-aware read-as-lines consumers' overstates how broadly exploitable this is in practice \u2014 realistic CSV-aware consumption paths are not actually corrupted.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "2 of 3 skeptics could not refute it",
+      "corrected": true,
+      "severityFrom": "high"
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The sanitization lives only inside transfer()'s one insert call, not anywhere a memo is read back out. I inserted a transfer row directly into the store (simulating data that predates this patch, was restored from a backup ledger.json, or was written by any future path other than transfer()) with memo 'rent\\x00tail', then ran exportTransfers: the exported CSV contained the raw NUL byte unchanged. transfersFor, publicTransfer, and csvCell never look at memo for control characters. So the README's new rule ('A memo is one line... refused with 400') describes new writes through this one function, not a property of the stored/exported data \u2014 the exact corruption the PR exists to stop is still fully reachable for any row that didn't pass through this specific code path.",
+      "why": "This requires reading a file the diff never touches (src/export.js) and reasoning about data that predates or bypasses the changed function's single call site \u2014 outside what correctness/boundary-contract/silent-drops/control-char-completeness look at (the diff's own hunk and its direct callers), and outside what migrations-and-rollout was evaluated for (it was ruled out on schema/column grounds, not on this behavioral, read-time gap)."
+    },
+    {
+      "what": "The PR's own stated justification doesn't hold against the code it's describing. I inserted a transfer with memo 'line1\\nline2' and exported it: src/export.js's csvCell already RFC4180-quotes any memo containing a comma, quote, or newline, producing a valid single CSV field \u2014 a real parser reads it as one row, not two. So the commit/README's lead example ('a newline... landed in the CSV export') was already false before this diff; that protection pre-existed in untouched code. The diff's blanket control-character strip happens to also close the real residual gap (raw NUL and other bytes csvCell doesn't escape), but for the wrong stated reason.",
+      "why": "This is a check of the PR's narrative against an adjacent, untouched subsystem (export.js's existing CSV escaping) rather than the diff's own logic \u2014 none of correctness, tests-that-dont-test, boundary-contract, control-character-definition-completeness, or silent-drops audits whether the described defect actually existed in the file it names; they examine what the diff changes, not what it claims about code it doesn't touch."
+    }
+  ],
+  "counts": {
+    "raw": 7,
+    "rootCauses": 2,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 1,
+    "corrected": 2,
+    "downgraded": 1,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 14,
+    "scout": 1,
+    "finders": 5,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 6,
+    "critic": 1,
+    "retries": 0
+  }
+}

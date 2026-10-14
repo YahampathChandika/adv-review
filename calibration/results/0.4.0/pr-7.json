@@ -1,0 +1,218 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "036830a04e80ca63d934f178397b7d640e59d0cc",
+  "target": {
+    "prs": [
+      7
+    ]
+  },
+  "angles": [
+    {
+      "title": "security",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "secrets-in-logs (stated invariant violated)",
+      "source": "scout"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema/data migration or store-format change in the diff (src/auth.js, src/export.js, src/server.js, README.md, test/server.test.js only); nothing touches src/migrations or Store.migrate."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "No new or changed entry point and no ownership/identity logic changed \u2014 the export route still goes through the same requireUser + getOwnAccount(store, user, params[0]) that existed before; the diff only adds a body field read after ownership is already established, and the log line added to auth.js fires on the already-existing 401 rejection path, not a new entry point."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR adds an optional `{ name }` body field to POST /accounts/:id/export that names the written CSV (validated only for type/length 1-64), returning the written filename, and adds a console.warn on failed sign-in logging method, path, and the raw Authorization header. Baseline check+test both pass (22/22) on this commit.",
+  "confirmed": [
+    {
+      "title": "Unsanitized export name enables path traversal",
+      "file": "src/export.js",
+      "line": 18,
+      "category": "injection",
+      "severity": "critical",
+      "rootCause": "The new `name` parameter on POST /accounts/:id/export is checked only for type and length (1-64 chars) in src/server.js, then joined unsanitized into the filesystem path in src/export.js (`path.join(dir, name + '.csv')`), so an authenticated account owner can supply traversal sequences (e.g. `../../etc/x`) to write the CSV outside the configured exports directory; the only tests added for the feature exercise a benign name and an over-length name, neither of which would detect this.",
+      "summary": "The caller-supplied `name` is validated only for type and length (1-64 chars) at src/server.js:103, then joined into the filesystem path with no sanitization, so `../` sequences in `name` let an authenticated account owner write a CSV file anywhere on disk reachable by relative traversal from `exportDir`, not just under `exports/`.",
+      "failure": "POST /accounts/:id/export as the account's own owner with body { name: \"../../../evil-marker\" } passes both the type/length check in src/server.js and getOwnAccount's ownership check, then src/export.js's `path.join(dir, name + '.csv')` resolves outside the configured exports directory; verified live that the CSV lands several directories above exportDir (observed at the temp root, outside the per-test ledger directory) while the JSON response reports only `{ exported: 0, file: 'evil-marker.csv' }`, hiding the true write location from the caller.",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Unsanitized export name enables path traversal"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Path traversal via export name"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Export name path-traversal escapes exports dir"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Unsanitized export name allows path traversal"
+        }
+      ],
+      "foundBy": [
+        "security",
+        "boundary-contract",
+        "correctness",
+        "tests-that-dont-test"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/server.js (lines ~97-110): the only check on the optional `name` is `typeof name !== 'string' || !name.length || name.length > 64` \u2014 no character/pattern restriction. Read src/export.js: exportTransfers does `path.join(dir, `${name ?? account.id}.csv`)` with zero sanitization (the removed docstring explicitly used to promise this couldn't happen). Read test/server.test.js: the two added assertions for `name` use 'statement-2026' (benign) and 'x'.repeat(65) (over-length only) \u2014 neither exercises a traversal sequence. I then reproduced it live: started the real HTTP server via test/helpers.js serve() with exportDir=<tmp>/ledger-XXXXXX/exports, created an account owned by tok-bob, and POSTed /accounts/:id/export with body { name: '../../../evil-marker' } using that owner's own token (so requireUser + getOwnAccount both pass legitimately). The server returned 200 with body { exported: 0, file: 'evil-marker.csv' } (basename only, masking the real location), and the CSV file was actually written at <tmp-root>/evil-marker.csv \u2014 three directories above the exports dir, outside the ledger's own temp directory entirely, confirmed via fs.stat and by reading back the CSV header row. This is an exact, unmodified-repo reproduction of the claimed failure with no refuting guard found anywhere in the request path.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Bearer token written to logs on failed sign-in",
+      "file": "src/auth.js",
+      "line": 25,
+      "category": "secrets-in-logs",
+      "severity": "critical",
+      "rootCause": "requireUser in src/auth.js now logs `ctx.req.headers.authorization` verbatim on every failed sign-in, writing the full raw bearer token to server logs in direct contradiction of the file's own doc comment that the token is never logged.",
+      "summary": "requireUser now logs `ctx.req.headers.authorization` verbatim on every failed authentication, writing the full raw bearer token (the only credential in this system) to server logs, directly contradicting this same file's own doc comment that \"the token is the only credential; it is never logged.\"",
+      "failure": "Any request whose Authorization header is present but does not match a stored user's token (a guessed token, or a legitimate user's expired/rotated/mistyped token) causes requireUser (src/auth.js:25) to call console.warn with ctx.req.headers.authorization verbatim, printing the full 'Bearer <token>' secret to the server's logs before the 401 is thrown \u2014 verified by direct invocation, which logged `sign-in failed GET /accounts with Bearer super-secret-real-token-abc123` for such a request while a request with no Authorization header at all logged only the safe placeholder '(no token)'.",
+      "sites": [
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Bearer token written to logs on failed sign-in"
+        },
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed sign-in logs the raw bearer token"
+        },
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed-auth log prints the raw Authorization header"
+        }
+      ],
+      "foundBy": [
+        "security",
+        "secrets-in-logs (stated invariant violated)",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/auth.js: the module's own top-of-file doc comment states \"The token is the only credential; it is never logged.\" The diff's new line in requireUser (src/auth.js:25) does exactly that: `console.warn('sign-in failed', ctx.req.method, ctx.req.url, 'with', ctx.req.headers.authorization ?? '(no token)')` logs the raw Authorization header verbatim, which is the literal `Bearer <token>` string, whenever authenticate() returns null. I confirmed there is no redaction layer anywhere: `grep -rn \"console\\.\" src/` shows only this line, a generic 500-error logger, and a startup banner -- nothing scrubs secrets. I then wrote a small script using the repo's own test helpers (freshStore/serve) to start the real server and issue `GET /accounts` with Authorization `Bearer super-secret-real-token-abc123` (a token matching no user, as a guessed or stale/rotated token would). The process printed: `sign-in failed GET /accounts with Bearer super-secret-real-token-abc123` -- the full secret in the log line, reproducing the claimed failure exactly, including that it applies identically to any failing token (guessed or legitimately stale/mistyped), not just attacker guesses. This is reachable on every unauthenticated or wrongly-authenticated request to any `requireUser`-wrapped route (i.e. nearly the whole API per server.js), with no guard, type check, or test anywhere preventing it.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Named exports clobber other owners' files",
+      "file": "src/export.js",
+      "line": 18,
+      "category": "data-integrity",
+      "severity": "high",
+      "rootCause": "Named exports are written into a single flat directory shared by all accounts/owners with no existence check or exclusive-create safeguard, so two different owners (or two accounts of the same owner) choosing the same `name` silently overwrite each other's export file \u2014 a collision risk that exists independent of any path-traversal sanitization and did not exist before this PR since filenames were previously always the unique account id.",
+      "summary": "A caller-supplied export `name` is written with no existence check or exclusive-create flag into a single flat directory shared by every account and every owner, so one owner's named export silently overwrites another unrelated owner's export file.",
+      "failure": "Two different owners (e.g. tok-bob and tok-cy) each export a different account of their own using the same caller-supplied `name` (a predictable or coordinated choice like 'monthly-report'); the second owner's write (via plain writeFile with the default truncating 'w' flag, no existence check) silently destroys the first owner's export file under the single shared exportDir, with both HTTP responses reporting identical-shaped 200 success and no indication that an existing file was overwritten.",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Named exports clobber other owners' files"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/export.js and src/server.js: exportDir is a single directory per server instance (shared across every account and every owner \u2014 test/helpers.js's serve() passes one exportDir for a store containing admin, member ('Bob'), and other ('Cy') users). The file path is path.join(dir, (name ?? account.id) + '.csv'), written via fs.writeFile with the default 'w' flag (truncate/create, not exclusive) and no pre-existence check. src/server.js's only validation on `name` is type/length (1-64 chars) \u2014 no uniqueness or ownership scoping. I reproduced the exact scenario end-to-end using the repo's own test/helpers.js (freshStore + serve): created two separate owners (tok-bob, tok-cy), each with two of their own accounts, each did a same-owner transfer with a distinguishing memo (BOB-SECRET-MEMO / CY-OTHER-MEMO), then each called POST /accounts/:id/export with the identical body {name: 'monthly-report'} for their own, unrelated account. Both calls returned 200 with the same-shaped body ({exported, file: 'monthly-report.csv'}) and no error. Reading exports/monthly-report.csv after both calls showed only Cy's row \u2014 Bob's transfer data was silently destroyed, with no signal in either HTTP response. I also diffed against the pre-PR version of src/export.js (git show <parent>:src/export.js), confirming the old code always wrote path.basename(account.id)+'.csv' \u2014 account ids are server-generated via newId('acc') and globally unique \u2014 so this cross-tenant/cross-account collision namespace did not exist before this diff and is introduced by it. test/server.test.js's new assertions only check a single named round-trip and an over-length rejection; no collision case is tested. The claim's description, reproduction, severity (HIGH \u2014 silent cross-tenant data-integrity loss, no error, no log signal, reachable by any two authenticated owners choosing a predictable name), and introduced-by-diff attribution all check out exactly as stated.",
+      "verifiedBy": [
+        "refute:p3.1",
+        "refute:p3.2",
+        "refute:p3.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/auth.js:24-25 adds a synchronous console.warn on every failed-auth request (wrong token, missing token, expired token, a scripted retry) with no throttling of the logging itself. README's own \"Known limitations\" section states \"There is no rate limiting\" on this service \u2014 so an attacker can send failed-auth requests at whatever rate they like, and now each one costs a log write where before it left no trace at all. This turns a documented, accepted gap (no rate limiting) into a new resource-exhaustion vector (log volume / disk fill / noisy stderr) introduced specifically by this diff.",
+      "why": "The security and secrets-in-logs angles both centered on *what* is logged (the bearer token) on that same line, not on the fact that logging is now unconditionally triggered by an attacker-controlled, unthrottled request rate. Volume/DoS-from-logging is a different failure mode from credential exposure, and boundary-contract, correctness, data-integrity and silent-drops don't examine log-write rate as a resource either \u2014 none of the seven run angles targets operational cost of a new always-on side effect on an unthrottled path."
+    },
+    {
+      "what": "Every other mutation in the codebase (account.open, account.close, and transfers per audit.js's own doc comment \"appended on every write\") calls record(store, actorId, action, target) so there is a durable, queryable trail of who did it. exportTransfers (src/export.js) has never called record(), and this diff \u2014 which is exactly the change that makes the operation materially more dangerous by letting the caller pick the destination file name \u2014 still doesn't add one. There is now no audit-log row showing which user wrote which file under which chosen name, only the ephemeral request-time info in stdout/stderr (which the generic 500 handler doesn't even capture for a 200-path success).",
+      "why": "authz-and-attribution was ruled out because ownership logic didn't change, so it never looked at whether the *action itself* is attributable after the fact via the audit subsystem; security/data-integrity focused on where the file lands and what can be overwritten, not on whether the write is recorded anywhere. src/audit.js is a subsystem no angle touched because the diff doesn't touch it either \u2014 that's exactly why the gap is invisible to a line-level read of the diff."
+    }
+  ],
+  "counts": {
+    "raw": 8,
+    "rootCauses": 3,
+    "merged": 0,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 3,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 20,
+    "scout": 1,
+    "finders": 7,
+    "triage": 1,
+    "sameSite": 1,
+    "skeptics": 9,
+    "critic": 1,
+    "retries": 0
+  }
+}
