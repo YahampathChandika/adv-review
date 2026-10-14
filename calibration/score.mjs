@@ -4,6 +4,8 @@
 //   node calibration/score.mjs [--results calibration/results] [--manifest calibration/manifest.json]
 //                              [--window 5] [--min-recall 0.7] [--offline] [--json]
 //
+// --results defaults to the newest calibration/results/<version>/ folder.
+//
 // A result file is what `/adv-review:review <n> --out …` wrote, named
 // `pr-<n>.json`. Unless --offline, each PR's current head is read with `gh`
 // and a result for another commit is skipped, so stale results never count.
@@ -21,7 +23,19 @@ const opt = (name, fallback) => {
   return i >= 0 && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') ? argv[i + 1] : fallback
 }
 const manifestPath = opt('manifest', path.join(here, 'manifest.json'))
-const resultsDir = opt('results', path.join(here, 'results'))
+// Results are kept per version: results/<version>/pr-<n>.json. Without --results,
+// the newest version is scored; a flat results/ of pr-*.json files still works.
+const newestResults = () => {
+  const root = path.join(here, 'results')
+  try {
+    const entries = readdirSync(root)
+    if (entries.some((f) => /^pr-\d+\.json$/.test(f))) return root
+    const versions = entries.filter((d) => /^\d+\.\d+\.\d+$/.test(d)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    if (versions.length) return path.join(root, versions.at(-1))
+  } catch {}
+  return root
+}
+const resultsDir = opt('results', newestResults())
 const window = Number(opt('window', 5))
 const minRecall = opt('min-recall', null)
 

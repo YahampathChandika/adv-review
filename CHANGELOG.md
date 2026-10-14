@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — 0.3.0
+
+- A test that cannot fail is no longer a finding of its own. When it hides a defect in
+  the diff, the defect is the finding and the blind test is one of its sites, named in
+  the summary; when the code under it is right, nothing is reported. Finders, triage and
+  the skeptics are each told so, and a blind test can no longer lead a root cause or set
+  its severity. In the 0.2.0 calibration this class was every false positive and seven
+  of the nine true findings nobody planted.
+- `--model <name>` picks the subagents' model for one run.
+- `calibration/run.sh` runs the calibration pass headless, one review per PR from a
+  clone of the fixture, and results are kept per version under `calibration/results/`.
+
 ## 0.2.0 — 2026-10-14
 
 Calibrated: on the fixture, with Sonnet agents, all ten planted defects confirmed and

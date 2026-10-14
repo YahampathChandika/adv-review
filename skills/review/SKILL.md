@@ -35,6 +35,8 @@ is out of scope (pass `stackedOn: 136`) and gets its own review.
 `--include-preexisting` — post pre-existing findings too (see §5).
 `--out <path>` — also write the run's result JSON to this file, for the calibration
 scorer or the user's own tooling.
+`--model <name>` — the subagents' model for this run, over the project config's `model`
+and the Opus default (see Notes).
 `--no-run` — agents read the code but execute none of it (see Notes).
 
 Resolve with `gh`. With no number, `gh pr view --json number` on the current branch.
@@ -139,8 +141,8 @@ If the runtime does not resolve the name, pass the script's path instead:
 `args` must be a real JSON object. `agents`, when given, a whole number (or a numeric
 string), `headSha` the head commit from §2, and `project` an object with the shape the
 README gives; a bad value of any of these stops the run before any agent starts.
-Add `run: false` for `--no-run`, and `model` only to override Opus (the project config's
-`model`, if set, is the override to pass).
+Add `run: false` for `--no-run`, and `model` only to override Opus: `--model` if given,
+else the project config's `model` if set.
 
 The workflow runs in the background and you are notified when it finishes. Do not poll
 it, and do not start a second review while one is running.
@@ -168,6 +170,9 @@ and the tool result also carries the run's `logs`.
 **If `status` is `incomplete`, say so first**, with the reasons — before any finding. An
 incomplete run is never reported as clean, and `missed: null` means the critic did not
 run: coverage is unknown, not complete.
+
+A finding may list the PR's own blind test among its `sites`: that is the test that let
+the defect through, named so the author fixes both, not a second defect.
 
 Report `confirmed` in two parts, each most severe first: the findings this PR
 introduced, then — in their own short section, headed as pre-existing and not the

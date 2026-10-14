@@ -41,16 +41,24 @@ that does so is not part of the fixture, so the agents cannot read it.
 
 ## Run a pass
 
-From a clone of the fixture, with the plugin installed, one review per PR:
+`run.sh` runs one headless review per PR from a clone of the fixture and writes each
+result where the scorer reads it. Clone the fixture, sign `gh` in to github.com, then:
 
 ```
-/adv-review:review <n> --no-post --out <this repo>/calibration/results/pr-<n>.json
+calibration/run.sh ../adv-review-calibration calibration/results/<version> 1 2 3 4 5 6 7 8 9 10 11
 ```
 
-Then, from this repository:
+`MODEL` picks the agents' model (default `sonnet`, which the published numbers use;
+`MODEL=opus` for the default users get). For two lanes, run it twice with disjoint PR
+lists in two separate clones; one clone cannot host two sessions at once. A review
+takes 15 to 30 minutes on the fixture. The session runs in permission mode `auto`,
+which approves what the review needs and refuses the rest.
+
+Results are kept per version under `results/`, so passes are comparable. Then:
 
 ```
-node calibration/score.mjs                # reads calibration/results/pr-*.json
+node calibration/score.mjs                # the newest results/<version>/
+node calibration/score.mjs --results calibration/results/0.2.0
 node calibration/score.mjs --min-recall 0.7   # exit 1 below the bar, for CI
 node calibration/score.mjs --json         # the rows and the summary as JSON
 ```
@@ -88,7 +96,7 @@ it would at a PR of yours. The answer key is not reachable from any branch.
 ### 0.2.0 — 14 October 2026, Sonnet agents
 
 One review per PR from a fresh clone, no `--agents` (the computed ceiling, 20), Sonnet
-as the agents' model and Opus orchestrating. The result files are in `results/`;
+as the agents' model and Opus orchestrating. The result files are in `results/0.2.0/`;
 `node calibration/score.mjs` reproduces every number below from them and the manifest.
 
 | | |

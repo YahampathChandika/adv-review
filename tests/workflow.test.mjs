@@ -798,3 +798,44 @@ test('with no ceiling given, the run takes one that fits every fixed angle, neve
   assert.equal(given.result.budget.ceiling, 20)
   assert.equal(given.result.status, 'incomplete')
 })
+
+test('a blind test rides with the defect it hides: one finding, the defect leads, its severity holds, the test is a site', async () => {
+  // The 0.2.0 calibration: beside nearly every planted defect, "the PR's test cannot
+  // catch this" came back as a second root cause, rated critical when the defect was
+  // high. One defect, one finding; the test is where it let the defect through.
+  const { result } = await run(base({ agents: 20 }), {
+    ...findersReturning({
+      correctness: [finding({ file: 'src/pages.ts', line: 70, severity: 'medium', title: 'Page drops its last item', summary: 'off by one' })],
+      'tests-that-dont-test': [
+        finding({ file: 'test/pages.test.ts', line: 71, category: 'test-coverage', severity: 'critical', title: 'Test cannot catch it', summary: 'three transfers never reach a page boundary' }),
+      ],
+    }),
+    triage: (p) => ({ clusters: [{ ids: idsIn(p), rootCause: 'the slice is off by one, and the new test cannot see it' }] }),
+  })
+  assert.equal(result.counts.rootCauses, 1)
+  assert.equal(result.confirmed.length, 1)
+  const f = result.confirmed[0]
+  assert.equal(f.title, 'Page drops its last item', 'the code finding leads, not the louder test gap')
+  assert.equal(f.severity, 'medium', 'a blind test never raises the severity of the defect it hides')
+  assert.deepEqual(f.sites.map((s) => `${s.file}:${s.line}`), ['src/pages.ts:70', 'test/pages.test.ts:71'])
+})
+
+test('a test gap on its own — a snapshot pinned without reason — is still a finding with its own severity', async () => {
+  const { result } = await run(base({ agents: 20 }), {
+    ...findersReturning({ 'tests-that-dont-test': [finding({ file: 'test/snap.test.ts', line: 3, category: 'test-coverage', severity: 'low', title: 'Snapshot pinned without reason' })] }),
+  })
+  assert.equal(result.confirmed.length, 1)
+  assert.equal(result.confirmed[0].title, 'Snapshot pinned without reason')
+  assert.equal(result.confirmed[0].severity, 'low')
+})
+
+test('finders, triage and skeptics are each told the blind-test rule', async () => {
+  const { calls } = await run(base({ agents: 20 }), {
+    ...findersReturning({ correctness: [finding(), finding({ line: 11 })] }),
+  })
+  const of = (kind) => calls.filter((c) => (c.label ?? '').startsWith(kind)).map((c) => c.prompt)
+  assert.ok(of('find').length > 0 && of('find').every((p) => p.includes('A test that cannot fail is not a finding by itself')))
+  assert.ok(of('find:tests-that-dont-test').every((p) => p.includes('A blind test is evidence, not a finding')))
+  assert.ok(of('triage').length === 1 && of('triage')[0].includes('the blind\n  test is a site of the defect, not a root cause of its own'))
+  assert.ok(of('refute').length > 0 && of('refute').every((p) => p.includes('while\n  the implementation in your worktree is right, has no failure: refuted')))
+})

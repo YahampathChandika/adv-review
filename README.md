@@ -23,7 +23,8 @@ would otherwise read three times.
    adds angles specific to this PR, and ranks the lot.
 2. **Review** (1 agent per angle): each hunts its angle alone and blind to the others.
    A finding needs a concrete failure — inputs or state, and the wrong outcome. Style
-   is not a finding.
+   is not a finding, and neither is a weak test over correct code: a test that cannot
+   fail is evidence on the defect it hides, reported as a site of that defect.
 3. **Triage** (1 agent): groups findings by root cause, so one defect reported at six
    call sites is verified once.
 4. **Verify** (skeptics): each root cause goes to a skeptic told to refute it. *Unsure
@@ -50,7 +51,7 @@ named as cut.
 | Angle | Looks for |
 | :- | :- |
 | `correctness` | Off-by-one, inverted conditions, null paths, unawaited promises, swallowed errors |
-| `tests-that-dont-test` | Tests that pass whether or not the code is right; snapshots accepted wholesale |
+| `tests-that-dont-test` | Tests that let a wrong change through: vacuous assertions, snapshots accepted wholesale, tests weakened or deleted so a change passes |
 | `boundary-contract` | Callers of a changed signature, consumers of a changed shape, values crossing an API, queue, row or file |
 | `silent-drops` | Values written but never stored or read back: stripped keys, read-only attributes, renamed-on-one-side fields |
 | `authz-and-attribution` | Authorisation before the first observable effect; identity re-derived server-side; machine writes not under a person's name |
@@ -90,6 +91,7 @@ From a session in the repository, on the PR's branch or any other:
 /adv-review:review 136 140         a stack, reviewed as one body of work
 /adv-review:review 140 --agents 30 raise the ceiling for a large PR
 /adv-review:review 140 --no-run    read the code, execute nothing
+/adv-review:review 140 --model sonnet   a cheaper, weaker run
 /adv-review:review 140 --post      post the summary comment without asking
 /adv-review:review 140 --out r.json  also write the result JSON to a file
 /adv-review:review 140 --include-preexisting   post pre-existing findings too
