@@ -578,6 +578,21 @@
         }
       ],
       "note": "True. The accountant test exercises the two read routes only, so it is blind to D5. The test gap of D5, worded as the defect itself; critical overstates a test gap."
+    },
+    {
+      "pr": 9,
+      "truth": true,
+      "title": "POST /accounts crashes to 500 on JSON null body",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            52,
+            52
+          ]
+        }
+      ],
+      "note": "True. Before this PR the route spread the body (`{ ...body, \u2026 }`), which tolerates null; the rewrite reads `body.label` directly, so a literal null JSON body throws and answers 500 instead of 400. Introduced at this line by the PR; the same class as the null-body finding on #7. Medium is fair."
     }
   ]
 }

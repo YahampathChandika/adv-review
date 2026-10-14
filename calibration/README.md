@@ -49,7 +49,8 @@ calibration/run.sh ../adv-review-calibration calibration/results/<version> 1 2 3
 ```
 
 `MODEL` picks the agents' model (default `sonnet`, which the published numbers use;
-`MODEL=opus` for the default users get). For two lanes, run it twice with disjoint PR
+`MODEL=opus` for the default users get) and `SESSION_MODEL` the orchestrating session's
+(default `opus`). For two lanes, run it twice with disjoint PR
 lists in two separate clones; one clone cannot host two sessions at once. A review
 takes 15 to 30 minutes on the fixture. The session runs in permission mode `auto`,
 which approves what the review needs and refuses the rest.
@@ -93,6 +94,45 @@ it would at a PR of yours. The answer key is not reachable from any branch.
 
 ## Results
 
+### 0.3.0 — 14 October 2026, Sonnet agents
+
+The same eleven PRs, same setup, after the blind-test rule (a test that cannot fail is
+evidence on the defect it hides, not a finding of its own, and nothing when the code
+under it is right). Run with `run.sh`, Sonnet agents, the orchestrating session on the
+machine's default model. Results in `results/0.3.0/`.
+
+| | 0.3.0 | 0.2.0 |
+| :- | :- | :- |
+| Planted defects confirmed | **10 of 10**, none wrongly refuted, none missed | 10 of 10 |
+| Confirmed findings true | **15 of 15**: 12 on planted defects, 3 adjudicated true | 20 of 25 |
+| On the two clean PRs | **no findings** | 3, all false |
+| Agents | 130 over 11 PRs; 3 to 18 per PR, mean 11.8 | 152; 7 to 20, mean 13.8 |
+| Time per PR | 15 to 28 minutes, mean 21 | 13 to 28, mean 21 |
+| Cost | about 55 dollars at list price, by the sessions' own cumulative figures | about 63 by the same method |
+
+| PR | planted | angles run | dropped | agents | minutes | raw | root causes | upheld | refuted |
+| :- | :- | -: | -: | -: | -: | -: | -: | -: | -: |
+| #1 | D1 | 4 | 5 | 10 | 22 | 6 | 1 | 1 | 0 |
+| #2 | D2 | 8 | 3 | 17 | 20 | 9 | 2 | 1 | 1 |
+| #3 | D3 | 4 | 4 | 10 | 17 | 2 | 1 | 1 | 0 |
+| #4 | D4 | 7 | 2 | 13 | 28 | 8 | 1 | 1 | 0 |
+| #5 | D5 | 7 | 2 | 13 | 16 | 8 | 1 | 1 | 0 |
+| #6 | D6 | 4 | 5 | 10 | 23 | 5 | 1 | 1 | 0 |
+| #7 | D7, D8 | 5 | 3 | 18 | 26 | 10 | 5 | 5 | 0 |
+| #8 | D9 | 7 | 2 | 13 | 21 | 10 | 1 | 1 | 0 |
+| #9 | D10 | 7 | 3 | 17 | 24 | 5 | 3 | 3 | 0 |
+| #10 | clean | 4 | 4 | 6 | 20 | 0 | 0 | 0 | 0 |
+| #11 | clean | 1 | 7 | 3 | 15 | 0 | 0 | 0 | 0 |
+
+Every planted defect came back as one finding, with the PR's blind test among its
+sites where there was one, and no finding was rated above the defect it names. The
+three true findings nobody planted are the null-body 500s on the export and account
+routes, now rated low and medium, and the seed script broken by #9's rename. One
+blemish on #7: the traversal came back twice, once under security and once re-described
+under data-integrity, a duplicate triage did not merge; and a distinct true finding
+beside it, a global export namespace where two owners choosing the same name overwrite
+each other's file. The caveats below still apply, and each PR was again reviewed once.
+
 ### 0.2.0 — 14 October 2026, Sonnet agents
 
 One review per PR from a fresh clone, no `--agents` (the computed ceiling, 20), Sonnet
@@ -107,7 +147,7 @@ as the agents' model and Opus orchestrating. The result files are in `results/0.
 | On the two clean PRs | 3 confirmed findings, all false |
 | Agents | 152 over 11 PRs; 7 to 20 per PR, mean 13.8 of the ceiling of 20; no retries, no agent lost, nothing left unverified |
 | Time to result | 13 to 28 minutes per PR, mean 21 |
-| Cost | about 65 dollars at list price for the pass, by the sessions' own estimates |
+| Cost | about 63 dollars at list price, by the sessions' own cumulative figures |
 
 | PR | planted | angles run | dropped | agents | minutes | raw | root causes | upheld | refuted |
 | :- | :- | -: | -: | -: | -: | -: | -: | -: | -: |

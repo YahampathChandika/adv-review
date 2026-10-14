@@ -1,0 +1,184 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "016008ca54a8acd3cc007b6c6c0ce2344685b86b",
+  "angles": [
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "seed-script-runtime",
+      "source": "scout"
+    },
+    {
+      "title": "label-name-naming-rationale",
+      "source": "scout"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No route, entry point, or identity/ownership check is added or changed. POST /accounts still runs through the same requireUser wrapper and still derives ownerId/actorId from the server-side user object, never from the client body; the only change to that line is which body field feeds the rename."
+    },
+    {
+      "title": "security",
+      "why": "No new injection surface, secret, redirect, CORS change, or third-party data flow. The diff only renames an internal field and a migration; the HTTP contract and input validation shape are unchanged."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No change to transfer/balance logic, caching, retries, or unbounded growth. The one real state-consistency hazard here (two store copies disagreeing across a deploy) is a migration/rollout ordering problem, already covered by migrations-and-rollout rather than being a separate app-level concurrency bug."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR renames the stored account field from `label` to `name` across the store SCHEMA, openAccount, and serialize.js (which still maps it back to `label` in the public API), and adds migration 003 which copies each account's label into name and deletes the old key in one step. The HTTP route and tests were updated to the new parameter name, but a non-test caller of openAccount was not.",
+  "confirmed": [
+    {
+      "title": "seed.mjs still builds openAccount with label, crashes",
+      "file": "scripts/seed.mjs",
+      "line": 26,
+      "category": "boundary-contract",
+      "severity": "high",
+      "rootCause": "scripts/seed.mjs still calls openAccount(...) with a `label` field, but accounts.js's openAccount was changed by this diff to destructure `name` instead, so seeded accounts get name=undefined and fail the required-field check.",
+      "summary": "scripts/seed.mjs calls openAccount with a `label` field, but openAccount's signature was changed by this diff to destructure `name`, so the seed script's accounts are opened with name=undefined.",
+      "failure": "Running `LEDGER_FILE=<path> node scripts/seed.mjs` (or the default `node scripts/seed.mjs`) against a ledger with no existing users throws an uncaught `HttpError('label is required')` from src/accounts.js:9, triggered by the call at scripts/seed.mjs:26 (`openAccount(store, { ownerId: member.id, label: 'Everyday', actorId: member.id })`), because openAccount now requires `name` and seed.mjs still passes `label`. The process exits with status 1; no users or accounts are persisted (the migration's own save leaves version 3 with empty users/accounts, and the script's final store.save() is never reached).",
+      "sites": [
+        {
+          "file": "scripts/seed.mjs",
+          "line": 26,
+          "title": "seed.mjs still builds openAccount with label, crashes"
+        },
+        {
+          "file": "scripts/seed.mjs",
+          "line": 26,
+          "title": "seed.mjs still passes label, openAccount now needs name"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract",
+        "seed-script-runtime"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Checked out the PR commit. src/accounts.js's openAccount was changed to destructure `name` (not `label`) as the required field, while scripts/seed.mjs lines 26-27 still call openAccount(store, { ownerId: member.id, label: 'Everyday'/'Savings', actorId: member.id }). Confirmed via git show on the pre-diff parent commit that openAccount previously destructured `label`, so seed.mjs was correct before this diff and is now broken by it. Actually ran `LEDGER_FILE=/tmp/seedtest-ledger.json node scripts/seed.mjs` in the worktree: it threw an uncaught `HttpError: label is required` at src/accounts.js:9, from the call at scripts/seed.mjs:26, and the process exited with status 1. Inspected the resulting ledger file: version is 3 (from the migration step) but users and accounts arrays are both empty, confirming the script's final store.save() (which would persist the seeded users/accounts) never ran because the crash happens on the first openAccount call, before any account is created or the final save. README.md:9 documents `node scripts/seed.mjs` as the way to seed dev/demo data, so this is a real, directly reproduced regression introduced by this diff, matching the claim exactly (both reported sites point to the same single real defect).",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Migration 003 is destructive, not additive-first",
+      "file": "src/migrations/003-account-name.js",
+      "line": 1,
+      "category": "migrations-and-rollout",
+      "severity": "high",
+      "rootCause": "Migration 003 adds `name` and deletes `label` in a single non-additive step (paired with store.js's SCHEMA and serialize.js's read path dropping `label` support in the same commit with no fallback), violating docs/deploy.md's documented rollout contract that removal of an old key must be a separate, later migration shipped only after no running copy reads it \u2014 risking permanent data loss on an ordinary rolling deploy/rollback.",
+      "summary": "Migration 003 copies label into name and deletes label in the same migration/release, and the same commit also removes 'label' from store.js's SCHEMA and serialize.js's read path with no fallback \u2014 violating this repo's own documented rollout contract (docs/deploy.md: additive first, removal is a separate later migration shipped once no running copy reads the old key) and causing a real, permanent loss of account labels on an ordinary rollback.",
+      "failure": "Verified by running the actual code end-to-end (migration + accounts.js + serialize.js, both pre-PR and post-PR versions, against the same ledger file) in a scratch repro: (1) New release deploys, migrate() runs 001-003, an account is opened and stored as {name:'Savings'}, version=3 on disk. (2) Ops rolls back to the previous release on the same file (a normal incident response, and squarely inside the 'two copies can run against one file' window docs/deploy.md is written for) \u2014 the old release's migrate() sees version already 3 and runs nothing (it only knows migrations up to v2), and because migration 003 deleted `label` with nothing in the old code ever reading `name`, every existing account now serializes via the old release's publicAccount as `{..., label: undefined, ...}` \u2014 every GET /accounts and GET /accounts/:id response silently loses its label for every account in the ledger, no error raised. (3) While still rolled back, a user opens a new account through the old release; it is stored with `label` only (old SCHEMA), as expected for that release. (4) Ops rolls forward again to the fixed release: migrate() sees version is already 3, so migration 003 is treated as already applied and never reruns \u2014 the account opened in step 3 is left with no `name` forever; the new release's publicAccount for it is `{..., label: undefined, ...}` permanently, with no further restart or redeploy able to recover it, because the version gate is store-wide (Store.migrate compares mod.version against the single data.version), not per-row. Migrations 001 and 002 never had this hazard (both are purely additive, so a rollback-then-forward-roll is always safe); 003 introduces it by being the first migration to delete a key the previous release still reads, in the same step that adds its replacement, with no down()/rollback path recorded anywhere in the migration framework (Store.migrate only ever calls `up`) or in docs/deploy.md.",
+      "sites": [
+        {
+          "file": "src/migrations/003-account-name.js",
+          "line": 1,
+          "title": "Migration 003 is destructive, not additive-first"
+        },
+        {
+          "file": "src/migrations/003-account-name.js",
+          "line": 1,
+          "title": "Migration 003 combines add and remove, breaking rollout policy"
+        }
+      ],
+      "foundBy": [
+        "migrations-and-rollout",
+        "label-name-naming-rationale"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Confirmed by reading the real code and by running the actual migration/store/accounts/serialize modules end-to-end in both pre-PR and post-PR form against the same ledger file. docs/deploy.md at HEAD explicitly states the rollout contract: migrations must be additive-first, removal of a key is a separate later migration shipped only once no running copy reads it, and 'two copies can run against one file during a deploy' is the scenario this rule exists for. The diff's migration 003 (src/migrations/003-account-name.js) both copies label->name and deletes label in one up(), in the same commit that also removes 'label' from store.js's SCHEMA and makes serialize.js's publicAccount read a.name instead of a.label with no fallback -- a direct violation of that contract, and this diff is what introduces all three changes together.\n\nI built a byte-for-byte repro: 'new' = this PR's src/{store,accounts,serialize,auth,audit}.js + migrations 001-003; 'old' = the parent commit 89da56f's versions of the same files + migrations 001-002 (003 does not exist pre-PR). Ran: (1) fresh deploy -> Store.migrate applies 001-003, data.version=3, insert account acc1={name:'Savings'}. (2) Roll back to the OLD release on the SAME file: OldStore.open sees data.version already 3; OldStore.migrate (which only knows versions 1-2) skips everything (mod.version <= this.data.version for all its migrations) and returns applied=[] -- no error, no halt, confirmed by actually running it (server.js's startup call to store.migrate has no version-ceiling guard either). Old release's publicAccount(acc1) then returns {..., label: undefined, ...}, and JSON.stringify of that response omits the 'label' key entirely -- verified literally: a response with no label field, for every pre-existing account. (3) While still rolled back, open a new account through the old release: stored as {label:'Checking'} only (old SCHEMA/pick), no name key -- confirmed in the saved row. (4) Roll forward again to the new release on the same file: data.version is already 3, so migrate() treats migration 003 as already applied and never reruns it (confirmed: applied=[] again). The account opened during the rollback window keeps label only, no name, forever; new release's publicAccount for it serializes with label: undefined permanently (confirmed), with no further redeploy able to fix it short of a new, explicit migration. The original account (whose name field was never touched) correctly shows label again once both releases agree on the new SCHEMA, so only accounts written during the mixed-version window are permanently affected -- exactly matching the claim's described mechanism and its scope. No guard, type check, or test anywhere (Store.migrate, server.js startup, docs/deploy.md) prevents or even detects this; Store.migrate's version gate is store-wide (a single data.version number), not per-row or per-migration, exactly as the claim states.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "POST /accounts crashes to 500 on JSON null body",
+      "file": "src/server.js",
+      "line": 52,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "The rewritten POST /accounts handler in src/server.js reads `body.label` directly instead of spreading `...body` into openAccount's options, so a valid JSON body of `null` throws a TypeError on property access and surfaces as an uncaught 500 instead of the intended 400 validation error.",
+      "summary": "The rewritten POST /accounts handler reads `body.label` directly instead of spreading `body`, so a syntactically valid JSON body of `null` throws a TypeError that is reported as a 500 instead of the clean 400 the validation path is meant to give.",
+      "failure": "A client sends `POST /accounts` with header `Authorization: Bearer <valid-token>` and raw body `null` (valid JSON, parses successfully in readJson). Before this diff, `openAccount(store, { ...body, ownerId, actorId })` spread `null` into `{}` (JS object-spread of null/undefined yields no properties, verified directly), so `label` was undefined and `openAccount` cleanly threw `HttpError(400, 'label is required')`. After this diff, `openAccount(store, { name: body.label, currency: body.currency, ownerId, actorId })` evaluates `body.label` eagerly, and reading a property off `null` throws `TypeError: Cannot read properties of null (reading 'label')`. That TypeError is not an `HttpError`, so `createServer`'s catch block in src/server.js treats it as an unknown failure: it logs `console.error('request failed', ...)` with the stack trace and returns `{status: 500, body: {error: 'internal error'}}` to the client, instead of the intended 400 validation error. Verified empirically: patching the handler back to the old `{...body, ownerId, actorId}` form and POSTing literal `null` returns `{status: 400, body: {error: 'label is required'}}`; the PR's current code returns `{status: 500, body: {error: 'internal error'}}` and logs a stack trace for what is actually a routine client input problem.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 52,
+          "title": "POST /accounts crashes to 500 on JSON null body"
+        }
+      ],
+      "foundBy": [
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Reproduced live against the running server in the worktree. readJson(req) on a raw body of 'null' returns JS null (JSON.parse('null') === null, and the chunks.length guard only short-circuits on a truly empty body, not a 4-byte 'null' payload). The PR's POST /accounts handler at src/server.js:52 does `openAccount(store, { name: body.label, currency: body.currency, ownerId: user.id, actorId: user.id })`, so `body.label` throws `TypeError: Cannot read properties of null (reading 'label')` when body is null. createServer's catch block (src/server.js ~122) only special-cases `err instanceof HttpError`; any other thrown value (including this TypeError) falls to the `status = 500` branch, logs via console.error, and returns {error: 'internal error'}. Verified via a real HTTP POST with Authorization: Bearer <valid token> and raw body 'null': got status 500, body {\"error\":\"internal error\"}, with the TypeError logged at server.js:52. I then edited the line back to the pre-diff spread form `{ ...body, ownerId: user.id, actorId: user.id }` (object-spread of null yields {}) and re-ran the identical request: got a clean 400 {\"error\":\"label is required\"}, confirming this is a regression introduced by this diff's change from spreading body to reading body.label directly. Checked test/server.test.js: no existing test posts a null or non-object JSON body to /accounts, and the full 22-test suite passes unmodified on the PR's code, confirming the regression is uncaught by the suite. Worktree restored to clean (git status clean) after the experiment.",
+      "verifiedBy": [
+        "refute:1"
+      ]
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [],
+  "counts": {
+    "raw": 5,
+    "rootCauses": 3,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 2,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 17,
+    "scout": 1,
+    "finders": 7,
+    "triage": 1,
+    "skeptics": 7,
+    "critic": 1,
+    "retries": 0
+  }
+}

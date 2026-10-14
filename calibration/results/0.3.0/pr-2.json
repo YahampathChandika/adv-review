@@ -1,0 +1,199 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "15dd7c4aaa0be03d4171fb77b94b233d29f75046",
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "stated-intent-vs-implementation",
+      "source": "scout"
+    },
+    {
+      "title": "existing-row backfill / pre-existing data",
+      "source": "scout"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "security",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "No route, server function, tool, or job is added or changed; transfer() still runs under the same existing caller/ownership checks (from.ownerId !== user.id / to.ownerId !== user.id) untouched by this diff, and record(store, user.id, 'transfer', row.id) attribution is unchanged."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema or data migration, no new/removed store field, no deploy-order concern — src/store.js SCHEMA and src/migrations/ are untouched by this diff."
+    },
+    {
+      "title": "data-integrity (concurrency/invalidation)",
+      "why": "Nothing in this diff touches locking, caching, retries, or multi-store writes; the only new logic is a pure string transform applied before the existing single-threaded store.update/insert calls, which are unchanged."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR adds a CONTROL regex and, when a memo contains a control character, does `memo = memo.replace(CONTROL, '')` — silently stripping the characters and letting the transfer succeed — rather than throwing the HttpError(400) that the PR title, its own description, and the updated README text ('is refused with 400') all promise. The one new test wraps the call in try/catch and asserts only inside the catch block, so with the code's actual strip-silently-and-succeed behavior the catch never runs and the test passes without ever executing its assertion.",
+  "confirmed": [
+    {
+      "title": "Control-char memo is silently sanitized, never rejected",
+      "file": "src/transfers.js",
+      "line": 20,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "transfer() in src/transfers.js sanitizes a control-character memo via memo.replace(CONTROL, '') and lets the transfer proceed instead of throwing HttpError(400, ...), contradicting the PR's title, stated intent, and the new README rule — and the new test (which wraps the call in try/catch and only asserts inside catch) passes regardless, masking this exact defect.",
+      "summary": "The PR's stated intent and the README line it edits both say a memo containing a control character is refused with HTTP 400, but the code never throws for that case — it strips the control characters with memo.replace(CONTROL, '') and lets the transfer proceed normally.",
+      "failure": "Confirmed exactly as claimed: transfer(store, user, { fromId, toId, amountCents: 1, memo: 'rent with\\nnewline' }) returns successfully (row with memo 'rent withnewline', control chars silently stripped, balance decremented) instead of throwing HttpError(400, ...); the new test at test/transfers.test.js:71-78 passes vacuously because its only assertion lives inside a catch block that is never reached.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control-char memo is silently sanitized, never rejected"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 16,
+          "title": "Control characters silently stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 16,
+          "title": "Control-char memo silently stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control characters are silently stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 16,
+          "title": "Control characters silently stripped, never refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Memo control chars silently stripped, not refused"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 20,
+          "title": "Control-character 'refusal' silently launders input instead"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 71,
+          "title": "New control-character test cannot fail"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "tests-that-dont-test",
+        "boundary-contract",
+        "stated-intent-vs-implementation",
+        "silent-drops",
+        "data-integrity",
+        "security"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js at the PR head: the memo branch (lines 16-21) only validates type/length and then unconditionally does `memo = memo.replace(CONTROL, '')` — there is no throw for a control character anywhere in the function or in any caller. Checked src/server.js: the POST /transfers route passes `body` straight from JSON.parse into transfer(store, user, body) with no prior sanitization or validation layer, so nothing upstream of transfer() could intercept this either. Wrote and ran a direct probe (openAccount/deposit/transfer via test/helpers.js) calling transfer() with memo: 'rent with\\nnewline': it returned normally, printed 'NO EXCEPTION THROWN. Transfer succeeded.', the stored row's memo was 'rent withnewline' (control byte silently dropped), and the from-account balance was decremented to 999 — exactly the claimed outcome. Also ran `node --test test/transfers.test.js`: all 7 tests pass, including the new 'a memo with a control character is refused' test, which (as in the diff) wraps the transfer() call in try/catch and asserts only inside the catch block (test/transfers.test.js:71-78) — since transfer() never throws for this input, the catch is never entered and the test passes without the assertion ever running, i.e. it is a blind test for precisely the behavior it claims to pin down. This directly contradicts both the PR title ('Refuse control characters in memos') and the new README line ('A memo with a control character in it is refused with 400'), and the code path (the replace/strip-and-proceed logic) was added by this diff, so it is diff-introduced.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [
+    {
+      "title": "No backfill for memos already stored with control characters",
+      "file": "src/migrations",
+      "line": 1,
+      "category": "data-migration",
+      "severity": "high",
+      "rootCause": "The PR enforces the no-control-character rule only on the transfer() write path and ships no migration to backfill/clean transfers rows already persisted before this change, leaving pre-existing dirty memos in violation of the newly documented guarantee.",
+      "summary": "The PR enforces the new 'no control characters in memo' rule only on the transfer() write path and ships no migration to clean transfers rows already persisted before this change, so pre-existing dirty memos remain forever and violate the newly documented guarantee.",
+      "failure": "Before this PR, transfer() validated only typeof/length (src/transfers.js, pre-diff), so a client could already have stored a transfer with memo containing a NUL byte or newline in a live data/ledger.json. After this PR ships, src/store.js and src/migrations/ are untouched -- no 003-*.js migration strips those bytes from existing `transfers` rows -- so that row stays dirty forever. I verified the consequence directly: inserting a transfers row the way such a pre-existing row would look (memo 'rent\\rfor May' or memo with an embedded NUL byte, built via store.insert the same way transfer() would have before this PR) and running exportTransfers() produces a CSV line with the raw \\r / NUL byte embedded unescaped, because src/export.js's csvCell (only quotes on /[\",\\n]/) does not escape a lone \\r or NUL. Likewise src/serialize.js's publicTransfer returns `memo: t.memo` verbatim, so GET /accounts/:id/transfers still hands a client a memo containing a control character for that row -- directly contradicting the new README line 'A memo ... is refused with 400' (i.e. is guaranteed free of control characters). This is exactly the CSV-corruption scenario the PR's own description says it is fixing, but it remains fully exploitable for every transfer stored before the PR's deploy, since the project's own documented migration discipline (docs/deploy.md, and the existing 001-init.js/002-account-currency.js pattern for exactly this kind of additive data-shape fix) was not used to retrofit existing data.",
+      "sites": [
+        {
+          "file": "src/migrations",
+          "line": 1,
+          "title": "No backfill for memos already stored with control characters"
+        }
+      ],
+      "foundBy": [
+        "existing-row backfill / pre-existing data"
+      ],
+      "preexisting": true,
+      "why": "Verified the facts the claim cites (src/store.js, src/migrations/ untouched; no 003-*.js added; .gitignore excludes data/ so no shipped ledger.json; csvCell in src/export.js only escapes /[\",\\n]/, not \\r or NUL; publicTransfer in src/serialize.js returns memo verbatim) and reproduced the CSV-escaping gap for a manually-inserted dirty row exactly as described. But the claim's framing -- that this PR was obligated to ship a migration backfilling historical memos -- does not hold up against this repo's own conventions. docs/deploy.md and the two existing migrations (001-init.js, 002-account-currency.js) define the migration discipline strictly around the store's SCHEMA/data *shape* (collections existing, a field getting a default when absent) -- never around sanitizing or re-validating the *contents* of a field that was always present and always a string. This PR adds a value-level input-validation rule (no control characters), which is categorically different from the shape changes the migration system exists for; nothing in the codebase's documented or demonstrated migration practice calls for a backfill migration when a validation rule is tightened. Additionally, the premise that dirty data already exists is entirely hypothetical for this repo: data/ is gitignored, scripts/seed.mjs never inserts a memo with a control character, and there is no shipped ledger.json -- the claim had to manually bypass transfer() via store.insert() to fabricate the 'pre-existing' row it then tested against. The claim itself concedes the underlying defect (if any) 'pre-existing -- on the base commit, this diff only touches it,' i.e. it is not introduced by this diff at all; it's a scope/process suggestion ('the PR could additionally have shipped a cleanup migration'), not a correctness bug in the change under review. Tightening forward-going validation without retroactively scrubbing already-stored data is the normal, expected shape of this kind of change in virtually any codebase (very much including this one's own precedent -- 002-account-currency.js backfills a newly-required *field default*, not a newly-disallowed *value pattern*), so treating its absence here as a HIGH-severity defect in this PR is overreach rather than a real defect the PR introduces or fails to guard against.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "dismissedAsUnsure": false
+    }
+  ],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The regression test added for this feature (test/transfers.test.js:71-78) is a tautological no-op: it calls `transfer(...)` inside a try/catch and only asserts inside the `catch` block, with no `assert.fail()` on the success path and no use of `assert.throws`. Since `transfer()` never actually throws for a control-char memo (it silently strips, per the already-reported finding at src/transfers.js:20), the catch body never runs and the test passes having executed zero assertions. I verified this is not a fluke: with `npm test` the test reports passing against the current (buggy, sanitize-not-reject) code, and it STILL reports passing after I temporarily deleted the `memo = memo.replace(CONTROL, '')` line entirely (so the control character flows to storage completely untouched, with no rejection and no sanitization at all). So this test provides no protection whatsoever for the behavior the PR claims to add, in either direction, and is why the sanitize-instead-of-reject bug could ship with a green test suite. (I restored the file afterward; worktree is clean.)",
+      "why": "Every angle in the scout's list (including 'tests-that-dont-test') was framed around whether the PRODUCTION behavior matches intent; none of them re-executed the new test under a mutated implementation to check whether the test itself can fail. The scout's one reported finding describes the implementation defect, not the fact that the safety net meant to catch exactly that defect is structurally incapable of failing -- that only surfaces by actually running the suite with the fix reverted, which is a step outside reading the diff and surrounding code."
+    },
+    {
+      "what": "The new `CONTROL` regex (`/[\\x00-\\x1f\\x7f]/g`, src/transfers.js:7) only matches ASCII C0 controls and DEL. It misses the C1 control range U+0080-U+009F -- which Unicode itself classifies as general category Cc ('control'), the very category this PR is targeting -- including U+0085 (NEL), a recognized line-break character on several platforms, and it misses the Unicode line/paragraph separators U+2028/U+2029, which JavaScript treats as line terminators. I confirmed both pass through `.replace(CONTROL, '')` completely unchanged (verified with a standalone script). So even a corrected version of this PR that throws instead of silently stripping would still let a memo containing a genuine Unicode control character or line terminator through as a plain, accepted string -- directly contradicting the newly-added README rule ('a memo is one line... a memo with a control character in it is refused') that this same PR introduces.",
+      "why": "This is a gap in the character class itself, not in the reject-vs-sanitize behavior that the scout's finding and the listed angles (correctness, boundary-contract) were framed around; it only shows up by cross-checking the regex's actual coverage against Unicode's own definition of 'control character' and against JS's own definition of line terminator, which requires running the pattern against inputs outside the ASCII range rather than reading the diff's intent."
+    }
+  ],
+  "counts": {
+    "raw": 9,
+    "rootCauses": 2,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 1,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 17,
+    "scout": 1,
+    "finders": 8,
+    "triage": 1,
+    "skeptics": 6,
+    "critic": 1,
+    "retries": 0
+  }
+}

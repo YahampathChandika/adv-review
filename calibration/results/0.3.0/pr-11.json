@@ -1,0 +1,86 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "be23305b3c846e94b25272aaabde16aa55e3fc21",
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration or schema file is touched by this diff. `currency` (SCHEMA, default 'AUD', and the backfill migration 002-account-currency.js) all already existed in the prior commit; this PR only reads the already-populated field into a CSV line. Confirmed by reading src/migrations/002-account-currency.js and src/accounts.js — unchanged by the diff."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "No entry point is added or changed. The `/accounts/:id/export` route in src/server.js (requireUser + getOwnAccount ownership check) is untouched by the diff — only export.js's internal row-building and the README text changed."
+    },
+    {
+      "title": "security",
+      "why": "The new field comes from `account.currency`, which openAccount() validates against a fixed enum (`CURRENCIES = ['AUD','NZD','USD']`) before it is ever stored — not free-form user input introduced by this diff. No new injection, secret, redirect, or third-party-data-sharing surface."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No concurrency or shared-state change. exportTransfers still does one in-memory build and one whole-file writeFile; adding one more value to the per-row array introduces no new race or partial-failure path."
+    },
+    {
+      "title": "silent-drops",
+      "why": "The CSV write bypasses the Store/SCHEMA pick() layer entirely (it's a plain file write, not store.insert/update), so there's no validator or ORM to strip the new field. I manually reverted export.js to the pre-diff version and reran test/server.test.js alone: both new assertions (header index 4 === 'currency', and the NZD/quoted-memo row regex) failed as expected, then reapplied the real diff and confirmed all 23 tests pass — the value is written and genuinely read back under this exact name."
+    },
+    {
+      "title": "boundary-contract",
+      "why": "Grepped the whole repo for other readers of this CSV shape (amountCents,memo, exportTransfers, exports/, .csv) — the only caller of exportTransfers is the one unchanged route in server.js, and the only reader of the written file is this PR's own test. There is no other in-repo consumer whose column assumptions could now be out of sync."
+    },
+    {
+      "title": "tests-that-dont-test",
+      "why": "Verified directly rather than by inspection: reverted src/export.js to drop the currency column, ran node --test test/server.test.js alone, and both new assertions failed with the exact expected-vs-actual mismatch (header 'memo' !== 'currency', and the strict-equal header-line check). Re-applied the real diff and all tests pass again. The test is not blind."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR adds a `currency` column (sourced from `account.currency`, positioned right after `amountCents`) to the per-account CSV transfer export in src/export.js, updates the README's endpoint table, and adds a test asserting the new header position and a row's currency/quoting. The `currency` field itself, its validation enum, its default ('AUD'), and its backfill migration all predate this PR (baseline commit 89da56f) — this diff only threads an already-reliable field into one more output.",
+  "confirmed": [],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The new `currency` column is spliced into the middle of the CSV schema (between `amountCents` and `memo`) rather than appended at the end, breaking any downstream consumer that reads the exported file by column position. This matters specifically because docs/deploy.md documents this repo's own rollout rule for shared files -- \"two copies can run against one file during a deploy... migrations are additive first... readers tolerate both shapes\" -- and exports/*.csv is the one artifact this service hands to something outside the live process. Old 6-column files already on disk (or written by an old server instance mid-rollout) now sit alongside new 7-column files with no version marker to tell them apart.",
+      "why": "`migrations-and-rollout` scoped itself only to \"migration or schema file\" (the JSON store) and never considered that the CSV export carries the same shared-file/rolling-deploy risk the repo explicitly documents elsewhere. `boundary-contract` explicitly limited its search to \"other in-repo consumer\" and so never evaluated external, position-based readers of the exported file, which is the entire point of an \"export\" feature."
+    },
+    {
+      "what": "No test asserts the actual currency VALUE in a row for an account using the default currency (AUD) -- only the explicitly-set 'NZD' path is checked at the row level. The pre-existing export test creates an account with no `currency` in the body (defaulting to AUD) but makes no transfer for it, so only the fixed header string is checked there; the new test always passes an explicit non-default currency.",
+      "why": "`tests-that-dont-test` verified the test fails when the column is removed entirely, which proves sensitivity to the feature's presence but says nothing about whether the default-value code path (`currency = 'AUD'` in `openAccount`) is ever exercised by a row-content assertion -- a regression that only manifested for the default value would pass every test in the suite."
+    }
+  ],
+  "counts": {
+    "raw": 0,
+    "rootCauses": 0,
+    "confirmed": 0,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 3,
+    "scout": 1,
+    "finders": 1,
+    "triage": 0,
+    "skeptics": 0,
+    "critic": 1,
+    "retries": 0
+  }
+}

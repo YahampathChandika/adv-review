@@ -1,0 +1,166 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "074592689156ce5df3f42042a91dffbd81dfed27",
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "running-total seed vs runtime arithmetic agreement",
+      "source": "scout"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "Migration 003 is purely additive (adds a `totals` array/column, removes nothing), the version gate in Store.migrate() makes it run exactly once, old code that doesn't know about `totals` never reads or writes it so mixed-version rollout is safe, and EMPTY()/load() default the field in both old and new shapes. Verified by reading 003-totals.js, store.js's migrate()/EMPTY()/load(), and the passing round-trip tests in store.test.js (version 3, re-migrate returns [])."
+    },
+    {
+      "title": "security",
+      "why": "The two new routes reuse the exact guard (requireRole('admin', ...)), body-size cap, and JSON-only parsing already used by every other route; amountCents is validated as a positive integer and accountId existence is checked before any mutation. No new string concatenation into a query/shell/HTML context, no new outbound calls, no secrets touched. Nothing in this diff introduces a new attack surface beyond what /deposits already had."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds POST /withdrawals (admin-only, mirrors deposit, refuses to overdraw or pay out a closed account) and GET /summary, which now reads a per-currency running total from a new `totals` collection seeded by additive migration 003 and kept up to date by a `bumpTotal` helper. The helper is wired into deposit() but not into withdraw(), so the running total only ever grows.",
+  "confirmed": [
+    {
+      "title": "Withdrawals never update the totals collection",
+      "file": "src/transfers.js",
+      "line": 77,
+      "category": "data-integrity",
+      "severity": "critical",
+      "rootCause": "withdraw() in src/transfers.js updates the account balance and records an audit entry but never calls bumpTotal() (unlike deposit(), which does), so the running totals collection backing GET /summary is only ever incremented and never decremented — summary permanently overstates real balances after any withdrawal — and both new tests (test/server.test.js and test/transfers.test.js) only re-check summary/GET /summary before the withdrawal, never after, so this exact defect passes the suite undetected.",
+      "summary": "Confirmed as stated: withdraw() omits the bumpTotal() call that deposit() makes, so the totals collection backing summary()/GET /summary is monotonically increasing and never reflects withdrawals, causing summary to permanently overstate real held balances after any withdrawal. All existing/new tests pass because none re-assert summary after a withdrawal.",
+      "failure": "Deposit 100 cents into an AUD account, then withdraw 40 cents: store.get('accounts', id).balanceCents is correctly 60, but summary(store) (and GET /summary) still returns { AUD: 100 } — 40 cents too high. Verified directly against the module: deposit(store, admin, {accountId, amountCents: 100}) then withdraw(store, admin, {accountId, amountCents: 40}) leaves sum of account balances = 60 while sum reported by summary() = 100. deposit() calls bumpTotal(store, account.currency, amountCents) at src/transfers.js:62, but the mirror call bumpTotal(store, account.currency, -amountCents) is absent from withdraw() (src/transfers.js:68-80) — it belongs right after the balance update at line 77, before the audit record() call at line 78. Because the totals collection only ever increases (on deposits) and never decreases, admins calling /summary see an amount of 'money held per currency' that overstates reality by the running sum of every withdrawal ever made, growing without bound as withdrawals accumulate — exactly the 'two stores of the same fact disagreeing' pattern, except it happens deterministically on every successful withdrawal rather than only on a crash. Both new tests that exercise this path pass unmodified with the bug present: test/transfers.test.js:71-80 asserts summary(store) equals {AUD: 50} right after the deposit (line 75) but never re-checks summary after the withdrawal on line 77; test/server.test.js:79-93 asserts the /summary body right after the deposit (line 87) but never calls GET /summary again after the POST /withdrawals on line 88 — it only checks the account balance afterward (line 89). Running `node --test` in the worktree at the PR head confirms all 24 tests pass despite the defect.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 77,
+          "title": "Withdrawals never update the totals collection"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 78,
+          "title": "withdraw() never calls bumpTotal, so totals drift"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "Withdrawals never update the currency totals"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "withdraw() never decrements the per-currency totals"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "withdraw() never decrements the totals/summary"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 68,
+          "title": "withdraw() never decrements the totals boundary"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 88,
+          "title": "Both new tests check summary only before the withdrawal"
+        },
+        {
+          "file": "test/transfers.test.js",
+          "line": 77,
+          "title": "New tests exercise withdraw() but never re-check summary after it"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "Both new summary tests stop short of checking after withdraw"
+        }
+      ],
+      "foundBy": [
+        "data-integrity",
+        "running-total seed vs runtime arithmetic agreement",
+        "silent-drops",
+        "correctness",
+        "tests-that-dont-test",
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js in full: withdraw() (lines 68-80) updates accounts.balanceCents and calls record() for the audit log, but never calls bumpTotal() — unlike deposit() (line 62), which does. Confirmed by direct execution: deposited 100 cents then withdrew 40 cents from a fresh AUD account via the real deposit()/withdraw()/summary() functions — store.get('accounts', id).balanceCents came back 60 (correct) while summary(store) came back { AUD: 100 } (40 cents too high, matching the deposit-only total). Also confirmed the HTTP layer uses these same functions directly: src/server.js wires POST /withdrawals to withdraw() and GET /summary to summary() with no additional reconciliation. Ran `node --test`: all 24 tests pass despite the defect, confirming the test-coverage-gap half of the claim. Read test/transfers.test.js (80 lines) and test/server.test.js (93 lines) and confirmed neither re-checks summary()/GET /summary after the withdrawal call — transfers.test.js checks summary at line 75 then withdraws at line 77 and only checks balance after; server.test.js checks /summary at line 87 then POSTs /withdrawals at line 88 and only checks account balance after. One cited site is wrong: test/transfers.test.js:206 does not exist — the file is only 80 lines long (wc -l confirms), so that specific line reference is fabricated, though the substance of claim 8 (no post-withdrawal summary assertion in that file) is otherwise true and covered by the correct line 77 citation at site 7.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "Deposits and withdrawals mutate an account's balanceCents but are never inserted into the `transfers` collection, so the one owner-facing feature built to explain balance changes — `GET /accounts/:id/transfers` and the CSV export (`exportTransfers` in src/export.js, both backed by `transfersFor` in src/transfers.js:83-88) — stays silent about them. I verified this directly: after a 500-cent deposit and a 100-cent withdrawal on a fresh account, `exportTransfers` returns 0 rows while the account balance sits at 400. This blind spot already existed for deposits; this PR's withdrawals (src/transfers.js:68-80, never touching the `transfers` collection either) double it, so an account owner now has zero record, in the one place designed to show it, of either direction of admin-driven balance movement on their own account.",
+      "why": "Every listed angle (correctness, tests-that-dont-test, data-integrity, authz-and-attribution, seed-vs-runtime agreement, boundary-contract, silent-drops) is scoped to the diff's own touched files and their direct callers — transfers.js, store.js, server.js, the migration. None of them follows `transfersFor`'s existing callers outward into export.js, a file the diff never touches and that was therefore outside any of their lookouts; a drop into a collection the code was never asked to write to isn't a 'silent drop' in the sense that angle checks (a schema stripping a field), it's a feature elsewhere losing data it never had a path to receive."
+    },
+    {
+      "what": "README.md's 'Users and roles' table (line 22) still says admin may do 'everything a member may, plus deposits into any account' — this line was left unedited even though the PR edits the API table two sections below (lines 39-41) to add admin-only POST /withdrawals and GET /summary. The short authorization summary a reader consults to learn what 'admin' means now understates this PR's own grant.",
+      "why": "This is an internal inconsistency between two tables in one file the diff itself edits, not a runtime behavior, so it falls outside correctness/data-integrity/boundary-contract/silent-drops (which inspect code paths and request/response contracts) and outside authz-and-attribution (which checks enforcement in code, not prose). No angle in the list was positioned to compare a doc's two sections against each other."
+    }
+  ],
+  "counts": {
+    "raw": 10,
+    "rootCauses": 1,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 13,
+    "scout": 1,
+    "finders": 7,
+    "triage": 1,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  }
+}

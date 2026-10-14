@@ -1,0 +1,161 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "88d0e534ac12020b2a6f616da97efb8b360d5676",
+  "angles": [
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "cross-route regression on existing account writes",
+      "source": "scout"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "No new injection surface, no secrets/tokens touched, no redirects, no CORS or third-party calls. The only new route is a simple validated integer write gated by requireRole('admin'); nothing in this diff crosses a trust boundary differently from the existing deposit route it mirrors."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No new concurrency primitive, cache, or cross-store invalidation is introduced. The route follows the exact same synchronous update-then-save pattern every other mutating route already uses (single in-process store, one writer at a time); canCover() is a pure function with no state of its own."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds admin-only POST /accounts/:id/overdraft to set a per-account overdraft limit, a canCover() helper transfers.js uses instead of a raw balance check, and migration 003 backfilling overdraftCents:0 on existing accounts. The field is also added to openAccount's initial row and to the public account serializer.",
+  "confirmed": [
+    {
+      "title": "overdraftCents is silently stripped on every write",
+      "file": "src/store.js",
+      "line": 12,
+      "category": "silent-drop",
+      "severity": "critical",
+      "rootCause": "SCHEMA.accounts in src/store.js was never extended with 'overdraftCents', so Store.pick() (run by both insert() and update()) silently strips that field from every accounts write — the admin's setOverdraft() call, openAccount()'s initial default, and migration 003's directly-mutated value (which is wiped the instant any later store.update() touches that row) — making the entire overdraft feature a non-persistent no-op while the API still returns 200 and the audit log records a change that never actually took effect.",
+      "summary": "SCHEMA.accounts was never extended with 'overdraftCents', so pick() (src/store.js:17-23), which store.insert() and store.update() both run every row through, strips the field from every account row on every write — the overdraft feature never actually persists.",
+      "failure": "An admin calls POST /accounts/:id/overdraft { overdraftCents: 500 } on a zero-balance account (src/accounts.js:54-62 setOverdraft -> store.update at line 59). store.update's pick() drops overdraftCents because it's absent from SCHEMA.accounts, so (a) the 200 response body built from that return value via publicAccount (src/server.js:92-97, src/serialize.js:9-19) falsely reports overdraftCents: 0 instead of 500 — the admin is told their write succeeded with a value that isn't what they set; (b) the row written to ledger.json has no overdraftCents key at all; (c) any later transfer that should be covered only by the overdraft (src/transfers.js:8-9 canCover, using from.overdraftCents ?? 0) is rejected with 409 'insufficient funds' because the stored account never carries the limit. I reproduced this against the real HTTP server (test/helpers.js serve/call): POSTed the overdraft, confirmed the 200 response body and a subsequent GET /accounts list both show overdraftCents: 0, confirmed the raw JSON on disk has no overdraftCents field on that account row, and confirmed a 300-cent transfer against the supposed 500-cent limit on a 0-balance account fails with 409 instead of succeeding. openAccount's own overdraftCents: 0 initial write (src/accounts.js:18, via store.insert) is dropped the same way, which is only invisible because 0 happens to match serialize.js's '?? 0' fallback default. The diff's own new test ('only an administrator sets an overdraft limit', test/server.test.js) only checks HTTP status codes (403/400/200) and never inspects the response body or re-reads the account, so it cannot catch this and passes despite the feature being completely inert.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents is silently stripped on every write"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents missing from store SCHEMA, write is dropped"
+        },
+        {
+          "file": "src/accounts.js",
+          "line": 59,
+          "title": "Overdraft limit write is silently discarded"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents missing from store SCHEMA, silently dropped"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Overdraft limit never persists; audit log lies about it"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents missing from store SCHEMA, silently dropped on every write"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents missing from SCHEMA.accounts"
+        },
+        {
+          "file": "src/migrations/003-overdraft.js",
+          "line": 4,
+          "title": "Migrated overdraftCents vanishes on next update"
+        }
+      ],
+      "foundBy": [
+        "silent-drops",
+        "boundary-contract",
+        "tests-that-dont-test",
+        "correctness",
+        "authz-and-attribution",
+        "migrations-and-rollout",
+        "cross-route regression on existing account writes"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js: SCHEMA.accounts = ['id','ownerId','label','currency','balanceCents','closedAt','createdAt','updatedAt'] — no 'overdraftCents'. pick() (lines 17-23) builds the stored row only from SCHEMA keys, and both insert() and update() route through pick(). Confirmed via `git diff <base>..88d0e53 -- src/store.js` that this PR never touched store.js, so the omission is introduced by this diff. Reproduced end-to-end by running the real code in the worktree (not mocks): (1) openAccount -> setOverdraft(admin,{overdraftCents:500}) -> the raw stored row has no overdraftCents key at all, setOverdraft's own return value lacks it, publicAccount() reports overdraftCents:0 (masked only by its '?? 0' default) instead of 500, and the audit log still records 'account.overdraft' as if the write succeeded. (2) A transfer for 300 cents against the supposedly-set 500-cent overdraft on a 0-balance account fails with 409 'insufficient funds', proving canCover() never sees the limit. (3) Ran migration 003 directly: it sets overdraftCents:0 by mutating data.accounts in place (bypassing pick), which is visible immediately after migrate(), but the very next store.update() call on that same row (even for an unrelated field) strips the key again — exactly the 'wiped by any later update' mechanism claimed. (4) Ran the full test suite (node --test): all 24 tests pass, including the new 'only an administrator sets an overdraft limit' test, which only asserts HTTP status codes (403/400/200) and never reads the response body or re-fetches the account, so it cannot and does not catch any of this. All 8 cited sites share this one root cause and are consistent with the described effects; none are false.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/accounts.js:60 — setOverdraft() calls record(store, admin.id, 'account.overdraft', accountId) unconditionally, writing a permanent, truthful-looking audit entry ('an admin set this limit') even though the account's actual stored overdraftCents never changes (due to the SCHEMA omission already reported). The audit log (src/audit.js), which README advertises as an independent core feature, has no reconciliation against live account state anywhere in the system, so every occurrence of this becomes an undetectable false record — forever, with no way for an operator to tell from the audit trail alone that the write didn't take.",
+      "why": "authz-and-attribution checks who gets attributed on a write, not whether the audit log stays consistent with the row it describes; silent-drops and cross-route-regression both focus on the account row's own field, not on a second subsystem (the append-only audit log) whose truthfulness guarantee this bug separately breaks. No angle's name targets audit-log/state consistency as its own concern."
+    },
+    {
+      "what": "docs/deploy.md explicitly describes two code versions running against one ledger file during a deploy. Migration 003 is guarded by the store's version counter and will never run again once applied. So even after someone fixes the SCHEMA omission the scout found, during a rolling deploy an old (pre-fix) binary's store.update() — built against its own SCHEMA that never had overdraftCents — can still strip an admin's just-set value, and no migration will ever restore it: the loss is permanent and silent, not merely transient.",
+      "why": "This requires reasoning about two different versions of the source code running concurrently against one shared file, per the repo's own rollout doc — a dimension beyond what a single-diff migration check (which validates one version's migrate() function in isolation) is positioned to examine. It also means the obvious fix ('add the key to SCHEMA') is necessary but not sufficient, which no angle's scope as named would surface."
+    }
+  ],
+  "counts": {
+    "raw": 8,
+    "rootCauses": 1,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 13,
+    "scout": 1,
+    "finders": 7,
+    "triage": 1,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  }
+}

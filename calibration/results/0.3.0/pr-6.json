@@ -1,0 +1,157 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "5d9e288679769335a688cda4db28d8b2a64b4675",
+  "angles": [
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "No SQL/HTML/URL construction, no secrets/tokens touched or logged, no redirects, no CORS change, and no new third-party data flow anywhere in this diff \u2014 it's a role check (actingFor), a lookup (store.get('users', id)), and a parameter pass-through."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No new concurrency, caching, or retry path. transfer() is still fully synchronous (no awaits between reading and writing balances), unchanged by this diff; the only thing that changed is which user object is passed in, not the update/insert sequence or its atomicity."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file added or changed, no SCHEMA change in src/store.js (onBehalfOf is never persisted \u2014 transfer() still destructures only fromId/toId/amountCents/memo), so there's no old-code/new-data or new-code/old-data split to check."
+    },
+    {
+      "title": "silent-drops",
+      "why": "onBehalfOf itself is a selector, not a value anyone expects to read back later, and the schema/pick() machinery is unchanged \u2014 nothing new is written to a collection and then silently stripped or unread. The one place an identity value does end up wrong (actorId/audit) is a wrong-value bug, not a dropped-field bug, and is covered under authz-and-attribution/boundary-contract instead."
+    },
+    {
+      "title": "correctness (as a separate general bucket)",
+      "why": "The diff's only new branching is the single ternary in src/server.js (onBehalfOf undefined or not) plus actingFor's two guard clauses; there's no loop, no new async/await, no numeric edge case, and no early return that skips cleanup beyond what's already exercised by tracing the identity question under authz-and-attribution and boundary-contract. Keeping it as a fourth separate agent on this tiny diff would just re-read the same three lines."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Admins can now move money between a named member's accounts over the phone: POST /transfers accepts onBehalfOf: <userId>, resolved server-side by the new actingFor() (403 if caller isn't admin, 404 if the user doesn't exist), and the resolved member is passed into the existing transfer() as the acting party. The rest of transfer()'s checks (ownership, balance, currency, closed) run unchanged against that member's accounts.",
+  "confirmed": [
+    {
+      "title": "On-behalf-of transfer attributed to the member, not the admin",
+      "file": "src/transfers.js",
+      "line": 34,
+      "category": "authz-attribution",
+      "severity": "high",
+      "rootCause": "transfer() in src/transfers.js uses its single `user` argument both to check account ownership and to set actorId/record the audit entry, so server.js's on-behalf-of branch (which passes the named member, resolved via actingFor, as that argument) causes the admin's action to be attributed to the member instead of the admin who actually performed it \u2014 and the new server.test.js test only checks status codes and balance, never actorId or the audit log, so it cannot catch this misattribution.",
+      "summary": "When an admin performs POST /transfers with onBehalfOf, the stored transfer row's actorId and the audit log entry both record the named member's user id instead of the admin's, falsely attributing the admin's action to a person who never made the request.",
+      "failure": "An admin (e.g. tok-ada) calls POST /transfers with onBehalfOf: <memberId>. server.js resolves owner=actingFor(...) (the member) and calls transfer(store, owner, body). Inside transfer(), actorId: user.id and record(store, user.id, ...) both store the member's id, not the admin's, in both the transfers table and the audit log \u2014 falsely attributing the admin's action to the member, verified by direct execution against the checked-out code.",
+      "sites": [
+        {
+          "file": "src/transfers.js",
+          "line": 34,
+          "title": "On-behalf-of transfer attributed to the member, not the admin"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 34,
+          "title": "On-behalf transfers attribute the audit trail to the member, not the admin"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 34,
+          "title": "On-behalf-of transfer audited under member's identity, not admin's"
+        },
+        {
+          "file": "src/transfers.js",
+          "line": 34,
+          "title": "On-behalf-of transfers misattribute actor in audit/ledger"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 79,
+          "title": "New on-behalf-of test never checks actorId or audit entries"
+        }
+      ],
+      "foundBy": [
+        "authz-and-attribution",
+        "boundary-contract",
+        "tests-that-dont-test",
+        "correctness"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/transfers.js: transfer(store, user, {...}) uses the single `user` param both for ownership checks (from.ownerId !== user.id / to.ownerId !== user.id) and for attribution (actorId: user.id at line 34, record(store, user.id, 'transfer', row.id) at line 37). Read src/server.js: the new on-behalf-of branch computes `owner = actingFor(store, user, body.onBehalfOf)` (the named member) and calls `transfer(store, owner, body)` \u2014 so the member, not the admin, is passed as the sole identity used for both authorization and attribution. Read src/audit.js (explicit invariant: actorId is the signed-in user, never a person who did not do it) and README.md line 47-48 area, both contradicted. Read test/server.test.js's new test (lines 78-94 in the final file) and confirmed it only asserts HTTP status codes and balanceCents, never actorId or audit entries \u2014 so it cannot catch this. Empirically reproduced by writing and running a script in the checked-out worktree that calls POST /transfers with token tok-ada and onBehalfOf: member.id: the stored transfers row's actorId and the matching audit entry's actorId both equal the member's id, not the admin's id (output: stored actorId == member.id, audit entries == [{actorId: member.id, action: 'transfer', ...}]). This is a genuine misattribution introduced by this diff (prior to the diff, `user` passed to transfer() was always the real caller, so actorId was always correct); all 5 reported sites point at the same confirmed defect (transfers.js:34/37 production code and server.test.js:79 area test gap) and none are false.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "actingFor (src/auth.js:38-42) checks only that the caller is an admin and that the target user exists; it never checks the target's role. An admin can pass onBehalfOf: <another admin's id> and move money between that other admin's own accounts, not just a member's. The PR title, description ('on a member's behalf', 'performs the transfer as that member') and the updated README API line ('to move money between that member's accounts'), plus the pre-existing README role table ('member: ... transfer between them'; 'admin: everything a member may, plus deposits'), all frame the target as a member \u2014 none of that is enforced in code. The one new test in test/server.test.js can't surface this: its 'member' fixture (Bob) is also the account owner used in the test, so the test never distinguishes 'checks the named member's accounts' from 'allows any existing user regardless of role'. This is separate from the already-reported actorId/audit attribution bug \u2014 it's about who may be impersonated, not how the action is recorded.",
+      "why": "authz-and-attribution's reported finding addresses mis-attribution of actorId, not which users are valid impersonation targets. boundary-contract would have had to read README.md's role table (outside the changed hunks) and cross-reference it against actingFor's two guard clauses to notice the missing other.role check. tests-that-dont-test would have had to notice the single new test reuses the same fixture user as both 'the impersonated member' and 'the account owner', so success there doesn't prove the target is restricted to members. correctness was explicitly folded into the other two angles on the assumption the only branching worth tracing was the identity question they already cover, so it never asked whether actingFor's guard clauses are complete rather than just correctly wired."
+    },
+    {
+      "what": "The README's 'Users and roles' capability table (lines 19-22) was left unchanged \u2014 it still says only 'admin: everything a member may, plus deposits into any account' \u2014 while the API route table two sections below was edited to add the onBehalfOf capability. The two tables in the same file now disagree about what 'admin' can do.",
+      "why": "All four angles were scoped to the code diff's own hunks (auth.js, server.js, the test) and to the one README line that was actually touched; none had reason to re-read the rest of README.md for a second, unedited table describing the same capability, since nothing in the diff points back at it."
+    }
+  ],
+  "counts": {
+    "raw": 5,
+    "rootCauses": 1,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 10,
+    "scout": 1,
+    "finders": 4,
+    "triage": 1,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  },
+  "logs": [
+    "no ceiling given \u2014 20 agents: room for every fixed angle and two of the scout's own",
+    "scout dropped security: No SQL/HTML/URL construction, no secrets/tokens touched or logged, no redirects, no CORS change, and no new third-party data flow anywhere in this diff \u2014 it's a role check (actingFor), a lookup (store.get('users', id)), and a parameter pass-through.",
+    "scout dropped data-integrity: No new concurrency, caching, or retry path. transfer() is still fully synchronous (no awaits between reading and writing balances), unchanged by this diff; the only thing that changed is which user object is passed in, not the update/insert sequence or its atomicity.",
+    "scout dropped migrations-and-rollout: No migration file added or changed, no SCHEMA change in src/store.js (onBehalfOf is never persisted \u2014 transfer() still destructures only fromId/toId/amountCents/memo), so there's no old-code/new-data or new-code/old-data split to check.",
+    "scout dropped silent-drops: onBehalfOf itself is a selector, not a value anyone expects to read back later, and the schema/pick() machinery is unchanged \u2014 nothing new is written to a collection and then silently stripped or unread. The one place an identity value does end up wrong (actorId/audit) is a wrong-value bug, not a dropped-field bug, and is covered under authz-and-attribution/boundary-contract instead.",
+    "scout dropped correctness (as a separate general bucket): The diff's only new branching is the single ternary in src/server.js (onBehalfOf undefined or not) plus actingFor's two guard clauses; there's no loop, no new async/await, no numeric edge case, and no early return that skips cleanup beyond what's already exercised by tracing the identity question under authz-and-attribution and boundary-contract. Keeping it as a fourth separate agent on this tiny diff would just re-read the same three lines.",
+    "scout sharpened: authz-and-attribution, boundary-contract, tests-that-dont-test",
+    "5 findings, 1 root cause(s)",
+    "1 upheld (1 corrected, 0 downgraded, 0 pre-existing), 0 refuted (0 only for doubt), 0 unverified",
+    "used 10 of 20 agents: 1 scout, 4 finder(s), 1 triage, 3 skeptic(s) (1 three-lens panel(s), 0 shared), 1 critic \u2014 this PR needed no more (4 angle(s) applied, 1 root cause(s) to verify)"
+  ],
+  "runId": "wf_12508f9b-967"
+}

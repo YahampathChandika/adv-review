@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased — 0.3.0
+## 0.3.0 — 2026-10-14
+
+Calibrated again on the same eleven PRs with Sonnet agents: all ten planted defects
+confirmed, none wrongly refuted; 15 of 15 confirmed findings true; no findings on the
+two clean PRs; 130 agents against 152. See `calibration/README.md`.
 
 - A test that cannot fail is no longer a finding of its own. When it hides a defect in
   the diff, the defect is the finding and the blind test is one of its sites, named in

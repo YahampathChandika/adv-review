@@ -1,0 +1,119 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "ec38b7f4818c2cd7a7aee111ab72a7bfe1d786e7",
+  "angles": [
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "silent-drops",
+      "why": "No field is renamed, added, or moved across a store/serialisation boundary. ownerId and actorId are already in store.js's SCHEMA for 'accounts' and 'audit' respectively, written and read back under the same names before and after this diff; openAccount still builds its store.insert() object as an explicit literal (not a spread of the options), so no stray key from the caller's object was ever stored, before or after."
+    },
+    {
+      "title": "security",
+      "why": "No new injection, secret, redirect, or CORS surface. The one touched route now passes an explicit {label, currency} object instead of spreading req.body, which narrows rather than widens what a client can influence, and openAccount never spreads its options into the stored row."
+    },
+    {
+      "title": "data-integrity",
+      "why": "Nothing here touches concurrency, caching, retries, or partial writes -- it's a synchronous call-signature rewrite over the existing single-process Store.insert/update calls, which are unchanged by this diff."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema or data migration, and the app is a single deployable process with no client/server version-skew window for a function signature -- every src/ and test/ call site is updated in the same commit. (A missed non-test caller does exist, but that's a boundary-contract question, not a rollout/migration one.)"
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "openAccount's signature changes from a single options object (ownerId, label, currency, actorId all equal) to (store, actor, {label, currency, ownerId = actor.id}), so the audit record now derives from actor.id and ownerId defaults to the actor but can diverge. The diff updates openAccount's one production caller (the POST /accounts route in src/server.js, which now forwards only {label, currency} instead of spreading req.body) and every call site in test/accounts.test.js and test/transfers.test.js to the new positional shape.",
+  "confirmed": [
+    {
+      "title": "seed.mjs still calls openAccount with the old options-object shape",
+      "file": "scripts/seed.mjs",
+      "line": 26,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "scripts/seed.mjs was never updated for openAccount's new (store, actor, options) signature and still calls it with the old single options-object shape, so that object binds to the new `actor` parameter, the third `options` parameter is left undefined, and the call throws on destructuring undefined before actor.id is ever evaluated.",
+      "summary": "The diff changes openAccount's signature to (store, actor, options) but scripts/seed.mjs, a caller left untouched by the diff, still calls it with the pre-refactor two-argument shape openAccount(store, { ownerId, label, actorId }), so the new second parameter `actor` binds to that plain options object instead of a user, the third parameter is left undefined, and the function throws before it even reaches the ownerId/actor.id logic.",
+      "failure": "Running `node scripts/seed.mjs` (as README.md's quick-start documents) throws `TypeError: Cannot destructure property 'label' of 'undefined' as it is undefined` at src/accounts.js:9 from the call at scripts/seed.mjs:26, because the old-shape options object binds to the new `actor` parameter and the third `options` argument is undefined; the script exits non-zero with no users or accounts seeded.",
+      "sites": [
+        {
+          "file": "scripts/seed.mjs",
+          "line": 26,
+          "title": "seed.mjs still calls openAccount with the old options-object shape"
+        },
+        {
+          "file": "scripts/seed.mjs",
+          "line": 26,
+          "title": "seed.mjs still calls openAccount with old shape"
+        }
+      ],
+      "foundBy": [
+        "correctness",
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Confirmed directly. scripts/seed.mjs is not touched by this PR's diff (the diff only modifies src/accounts.js, src/server.js, test/accounts.test.js, test/transfers.test.js) and still calls openAccount(store, { ownerId: member.id, label: 'Everyday', actorId: member.id }) — the old single-options-object shape. The new signature is openAccount(store, actor, { label, currency = 'AUD', ownerId = actor.id }). Running `LEDGER_FILE=/tmp/seed-test-ledger.json node scripts/seed.mjs` in the checked-out worktree reproduced exactly the claimed crash: `TypeError: Cannot destructure property 'label' of 'undefined' as it is undefined` thrown at src/accounts.js:9 from the call at scripts/seed.mjs:26, exit code 1. Verified README.md line 9 documents `node scripts/seed.mjs` as the quick-start seed command, matching the claim's framing. This is a real regression introduced by this diff: it changed openAccount's signature but left one of its callers (seed.mjs) on the old call shape, breaking the documented seed workflow before any users/accounts are created.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/server.js's POST /accounts handler changed from `openAccount(store, { ...body, ownerId: user.id, actorId: user.id })` to `openAccount(store, user, { label: body.label, currency: body.currency })`. Spreading `null` in JS is safe (`{...null}` === `{}`), so a request whose JSON body is the literal `null` previously fell through to the existing 'label is required' 400 validation. The new code dereferences `body.label` directly, which throws `TypeError: Cannot read properties of null (reading 'label')` on a null body -- caught by the server's generic handler and surfaced as a 500 'internal error' (with a server-side console.error) instead of the prior clean 400. Verified empirically by POSTing a literal `null` body to a running server built from this diff: got `500 {\"error\":\"internal error\"}` where the pre-diff code path would have produced `400 {\"error\":\"label is required\"}`. This directly contradicts the PR's 'no behaviour change' claim and is not covered by any existing test (no test in test/*.js sends a null body).",
+      "why": "boundary-contract and silent-drops were scoped to the store/serialisation boundary (field renames across SCHEMA), not the HTTP request-body boundary -- this bug lives entirely in how the route dereferences `body`, with no field renamed or dropped in storage. security was scoped to injection/widening of what a client can influence in the stored row; this is a narrowing of accepted fields that happens to remove a prior null-safety side effect, which isn't a security-widening concern. tests-that-dont-test and correctness looked at whether the refactored call sites preserve the SAME assertions as before, not at untested HTTP edge-case inputs the diff newly makes reachable. data-integrity and migrations-and-rollout were scoped to concurrency/versioning, irrelevant here. So no angle was positioned to catch an edge case that only appears when you trace what `body.label` evaluates to for every possible parsed-JSON shape, including the one value (`null`) where property access and object-spread diverge."
+    }
+  ],
+  "counts": {
+    "raw": 2,
+    "rootCauses": 1,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 10,
+    "scout": 1,
+    "finders": 4,
+    "triage": 1,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  }
+}

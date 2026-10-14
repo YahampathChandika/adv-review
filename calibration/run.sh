@@ -9,6 +9,8 @@
 #                  signed in to github.com (the skill resolves PRs with it)
 #   <results-dir>  where pr-<n>.json lands, e.g. calibration/results/0.3.0
 #   MODEL          the agents' model, default sonnet (passed as --model)
+#   SESSION_MODEL  the orchestrating session's model, default opus; it reads the
+#                  diff, launches the workflow and writes the report, nothing more
 #   LANE           a label for the log lines, default lane1
 #   MAX_MIN        give up on a PR after this many minutes, default 90
 #
@@ -24,6 +26,7 @@ clone=${1:?clone path}; results=${2:?results dir}; shift 2
 [ $# -gt 0 ] || { echo "no PRs given" >&2; exit 2; }
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
 MODEL=${MODEL:-sonnet}
+SESSION_MODEL=${SESSION_MODEL:-opus}
 LANE=${LANE:-lane1}
 MAX_MIN=${MAX_MIN:-90}
 results="$(cd "$(dirname "$results")" && pwd)/$(basename "$results")"
@@ -43,7 +46,7 @@ for pr in "$@"; do
   echo "=== PR #$pr start $(date -u +%FT%TZ) [$LANE]" | tee -a "$progress"
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/advcal.XXXXXX"); mkfifo "$fifo"
   (cd "$clone" && claude -p --input-format stream-json --output-format stream-json --verbose \
-      --plugin-dir "$PLUGIN" --permission-mode auto < "$fifo" > "$log" 2>&1) &
+      --plugin-dir "$PLUGIN" --model "$SESSION_MODEL" --permission-mode auto < "$fifo" > "$log" 2>&1) &
   pid=$!
   exec 3>"$fifo"
   python3 -c 'import json,sys; print(json.dumps({"type":"user","message":{"role":"user","content":sys.argv[1]}}))' \

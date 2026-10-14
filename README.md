@@ -201,11 +201,11 @@ run each PR with `--out`, then `node calibration/score.mjs` reports which plante
 defects were confirmed, found and then wrongly refuted, or missed, what was reported
 that nobody planted, and recall and precision over the set.
 
-The first pass, for 0.2.0 with Sonnet agents: all ten planted defects confirmed and
-none wrongly refuted; 20 of 25 confirmed findings true after a person adjudicated the
-unplanted ones, the five false being coverage notes on correct code; three findings on
-the two clean PRs, all false; 7 to 20 agents and 13 to 28 minutes per PR. The result
-files and every adjudication are in [`calibration/`](calibration/README.md#results).
+The 0.3.0 pass, with Sonnet agents: all ten planted defects confirmed and none
+wrongly refuted; 15 of 15 confirmed findings true; no findings on the two clean PRs;
+3 to 18 agents and 15 to 28 minutes per PR. The 0.2.0 pass, before the blind-test rule,
+had 20 of 25 true. The result files and every adjudication are in
+[`calibration/`](calibration/README.md#results).
 
 ## Tests
 

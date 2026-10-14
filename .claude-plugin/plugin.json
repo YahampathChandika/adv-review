@@ -1,7 +1,7 @@
 {
   "name": "adv-review",
   "displayName": "Adversarial PR Review",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Adversarial pull-request review: a scout designs the review, one agent per angle hunts independently, and every finding has to survive a skeptic told to refute it. Claude Code only.",
   "author": {
     "name": "Yahampath Chandika",
