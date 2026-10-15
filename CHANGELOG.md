@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 — 2026-10-15
 
 - `--agent copilot`: the GitHub Copilot CLI as a fourth agent, through `copilot -p` in
   silent mode with the answer asked for in the prompt and checked by the runner. Its tool

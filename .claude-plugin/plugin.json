@@ -1,7 +1,7 @@
 {
   "name": "adv-review",
   "displayName": "Adversarial PR Review",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Adversarial review of pull requests and branches: a scout designs the review, one agent per angle hunts independently, and every finding has to survive a skeptic told to refute it. A Claude Code plugin; the same review runs with the Claude, Codex, Gemini or GitHub Copilot CLIs through a standalone runner (experimental).",
   "author": {
     "name": "Yahampath Chandika",
