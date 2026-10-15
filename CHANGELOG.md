@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `/adv-review:review 140 --agent codex` (or `gemini`, `copilot`) in Claude Code runs the
+  review with that CLI's agents through the runner and reports as usual. The skill finds
+  the runner through `$CLAUDE_PLUGIN_ROOT` in an installed plugin.
+
 ## 0.5.2 — 2026-10-15
 
 - `--agent copilot`: the GitHub Copilot CLI as a fourth agent, through `copilot -p` in

@@ -523,4 +523,6 @@ test('the skill names the runner for agents without a Workflow tool', () => {
   assert.ok(skill.includes('runner/review.mjs'))
   assert.ok(skill.includes('--agent <codex|gemini|copilot|claude>'))
   assert.ok(skill.includes('ADV_REVIEW_HOME'))
+  assert.ok(skill.includes('$CLAUDE_PLUGIN_ROOT'), 'the installed plugin finds its runner')
+  assert.ok(skill.includes('`--agent codex|gemini|copilot` — run the review with that CLI'), 'the flag is in the argument list, so Claude Code sessions take it')
 })

@@ -23,18 +23,25 @@ invoking this skill is the opt-in, for up to the agent count below.
 
 ## 0. Which path
 
-If you have a **Workflow** tool (Claude Code), follow §1–§6 below. Otherwise — OpenAI
-Codex, Google Gemini, GitHub Copilot, or any agent without it — run the standalone runner
-and report from its output:
+The review runs one of two ways, and `--agent` decides:
 
-```
-node "$ROOT/runner/review.mjs" <the same arguments the user gave> --agent <codex|gemini|copilot|claude> --out <tmp>/result.json
-```
+- **Claude agents on Claude Code's workflow runtime** — the default in Claude Code, and
+  `--agent claude` there: follow §1–§6 below. This path can resume a lost run.
+- **CLI agents through the standalone runner** — `--agent codex`, `gemini` or `copilot`
+  from any session, and every agent without a **Workflow** tool whatever `--agent`
+  says (OpenAI Codex, Google Gemini, GitHub Copilot): run the runner and report from
+  its output:
 
-`$ROOT` is `ADV_REVIEW_HOME` if set, else the directory two levels above this SKILL.md
+  ```
+  node "$ROOT/runner/review.mjs" <the same arguments the user gave> --agent <codex|gemini|copilot|claude> --out <tmp>/result.json
+  ```
+
+`$ROOT` is `ADV_REVIEW_HOME` if set, else `$CLAUDE_PLUGIN_ROOT` where Claude Code sets
+it (the installed plugin), else the directory two levels above this SKILL.md
 (`skills/review/SKILL.md` sits in the repository root's `skills/review/`). The runner
 performs §1–§2 itself, prints progress to stderr and the report to stdout; read
-`result.json` and report it as §5 describes. Nothing is posted without `--post`, and a
+`result.json` and report it as §5 describes. Pass `--stacked-on <n>` where §1 would
+set `stackedOn`. Nothing is posted without `--post`, and a
 branch review never posts. In a Codex session, do not run the runner yourself: Codex
 sandboxes commands without network, which cuts the review's agents off — tell the user to
 run that command from a terminal. If the runner is missing, the skill folder was copied
@@ -57,6 +64,9 @@ against its base (see §2). Report only: there is nothing to post to.
 remote's default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`), else the
 first of `origin/main`, `origin/master`, `main`, `master` that exists.
 `--agents N` — the MOST agents the review may use (see §3 for the default).
+`--agent codex|gemini|copilot` — run the review with that CLI's agents through the
+runner instead of Claude Code's runtime (see §0); `--model` then names a model of that
+vendor.
 `--post` — post the summary without asking at the end (see §6).
 `--include-preexisting` — post pre-existing findings too (see §5).
 `--out <path>` — also write the run's result JSON to this file, for the calibration

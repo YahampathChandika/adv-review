@@ -233,6 +233,7 @@ Run from a session in the repository, on any branch.
 | `--model NAME` | the subagents' model for this run, overriding the project config and the Opus default |
 | `--no-run` | agents read the code but execute none of it; see [Security](#security) |
 | `--post` | post the summary comment without asking; pull requests only |
+| `--agent codex\|gemini\|copilot` | run the review with that CLI's agents through the runner instead, from inside Claude Code; see [Agents and models](#agents-and-models) |
 | `--out PATH` | also write the result JSON to a file |
 | `--include-preexisting` | include pre-existing findings in the posted comment |
 
