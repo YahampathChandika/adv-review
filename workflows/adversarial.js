@@ -158,14 +158,19 @@ touches, not in the changed line.`
 const WORKSPACE = `
 YOUR WORKSPACE
 You are in your OWN disposable git worktree. It starts on the repository's main branch,
-NOT on this ${UNIT} — so before you read anything, move it to the ${SHORT}'s head:
+or already at the commit below, NOT necessarily on this ${UNIT} — so before you read
+anything, make sure it is at the ${SHORT}'s head. First:
+
+  git rev-parse HEAD
+
+If that already prints the commit below, you are in place: carry on. If not:
 
   git checkout --detach ${HEAD_SHA} && git rev-parse HEAD
 
-Put what that last command prints in "reviewedCommit". If the checkout fails, stop and
-report what \`git rev-parse HEAD\` prints instead: work done on the wrong commit is
-discarded. Relative paths then resolve to the ${SHORT}'s code, and nothing you do here touches
-anyone else's copy.
+Put what \`git rev-parse HEAD\` prints in "reviewedCommit". If HEAD is not the commit
+below and the checkout fails, stop and report what \`git rev-parse HEAD\` prints: work done
+on the wrong commit is discarded. Relative paths then resolve to the ${SHORT}'s code, and
+nothing you do here touches anyone else's copy.
 ${
   RUN_CODE
     ? `- You may run code and edit files HERE to test a claim. ${

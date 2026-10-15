@@ -109,6 +109,30 @@ planted, or a false one, goes into `adjudicated` with its PR, site and `truth`, 
 the reasoning in `note`. A ruling on a finding's own site outranks a planted line among
 its grouped sites. Unknown is not true, so an unadjudicated finding lowers precision.
 
+## Other agents
+
+`bench.sh` runs a sample of the fixture through the standalone runner for one agent at a
+time, from a terminal:
+
+```
+calibration/bench.sh ../adv-review-calibration claude        # Claude agents; MODEL=sonnet for comparability
+calibration/bench.sh ../adv-review-calibration codex         # the Codex CLI's default model
+calibration/bench.sh ../adv-review-calibration gemini
+```
+
+The default sample is PRs #4, #7, #14 and #11: two planted defects from the first set,
+one from the second, and a clean PR. Results land in `results/0.5.0-<agent>/`, which the
+scorer's default skips (it is not a bare version), so score them explicitly:
+
+```
+node calibration/score.mjs --results calibration/results/0.5.0-codex
+```
+
+Each result carries a `runner` block naming the agent, the model the CLI reported, the
+CLI version, every call with its duration and cost, and the elapsed time. A sample this
+small is indicative, not a score; it shows whether the review works at all with that
+agent and roughly what it costs.
+
 ## What the numbers mean
 
 Recall is over planted defects: the review was told nothing about them, and the PRs

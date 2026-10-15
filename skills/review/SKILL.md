@@ -21,6 +21,26 @@ trip them, adding its own, and ranking the lot.
 type "ultracode", and do not ask whether to use multi-agent orchestration — the user
 invoking this skill is the opt-in, for up to the agent count below.
 
+## 0. Which path
+
+If you have a **Workflow** tool (Claude Code), follow §1–§6 below. Otherwise — OpenAI
+Codex, Google Gemini, or any agent without it — run the standalone runner and report from
+its output:
+
+```
+node "$ROOT/runner/review.mjs" <the same arguments the user gave> --agent <codex|gemini|claude> --out <tmp>/result.json
+```
+
+`$ROOT` is `ADV_REVIEW_HOME` if set, else the directory two levels above this SKILL.md
+(`skills/review/SKILL.md` sits in the repository root's `skills/review/`). The runner
+performs §1–§2 itself, prints progress to stderr and the report to stdout; read
+`result.json` and report it as §5 describes. Nothing is posted without `--post`, and a
+branch review never posts. In a Codex session, do not run the runner yourself: Codex
+sandboxes commands without network, which cuts the review's agents off — tell the user to
+run that command from a terminal. If the runner is missing, the skill folder was copied
+without the repository: say so and point to the README's Installation section. Other
+agents are experimental; the README's capability matrix says what each enforces.
+
 ## 1. Resolve the target
 
 `/adv-review:review` — the PR for the current branch.
@@ -279,6 +299,9 @@ reporting.
 - **What it cannot see.** It reviews the diff at its head, PR or branch, not the merged result
   or a sequence of PRs deploying separately — a two-step migration is a property of two
   changes in order, and needs a person.
+- **Other agents.** The runner (`runner/review.mjs`) is the reference for what §1–§2 and
+  §5–§6 describe here; `--agent codex` and `--agent gemini` are experimental, and the
+  README's capability matrix says what each CLI enforces.
 - **The angles are the review.** The eight generic angles are a floor. A project's own
   angles — written from the defects it has actually shipped — are what make a review
   find the next one. When a review misses a class of bug that later bites, add an angle

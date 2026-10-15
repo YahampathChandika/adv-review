@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — 0.5.0
+
+- A standalone runner, `runner/review.mjs`, runs the same review with each agent as a
+  headless CLI process in its own git worktree: `--agent claude`, `codex` or `gemini`,
+  with `--model` choosing the model within the vendor. It prepares the pull request or
+  branch, enforces each agent's answer shape (Claude and Codex through their CLIs,
+  Gemini through the runner's own check and one retry), caps concurrency with `--jobs`,
+  writes `--out`, posts with `--post`, and records what produced the result under
+  `runner`. Codex and Gemini are experimental; Gemini has not been run against a real
+  CLI. The runner is also the way to run the review from CI or with an API key.
+- The skill works for agents without a Workflow tool: it tells them to run the runner.
+- A capability matrix in the README says what each agent enforces.
+- Agents' worktrees may start at the commit under review, not only on main; the
+  prompt says so. Codex's sandbox keeps `.git` read-only, so the agent's own checkout
+  cannot be relied on there.
+- `calibration/bench.sh` runs a four-PR sample through the runner for one agent.
+
 ## 0.4.0 — 2026-10-15
 
 Calibrated on both sets with Sonnet agents: 17 of 18 planted defects confirmed, none

@@ -3,9 +3,10 @@
 [![tests](https://github.com/YahampathChandika/adv-review/actions/workflows/test.yml/badge.svg)](https://github.com/YahampathChandika/adv-review/actions/workflows/test.yml)
 [![release](https://img.shields.io/github/v/release/YahampathChandika/adv-review)](https://github.com/YahampathChandika/adv-review/releases)
 [![licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
-![platform](https://img.shields.io/badge/platform-Claude%20Code-informational)
+![agents](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20Gemini-informational)
 
-Adversarial review of pull requests and branches for [Claude Code](https://code.claude.com).
+Adversarial review of pull requests and branches, for [Claude Code](https://code.claude.com)
+and, experimentally, for OpenAI Codex and Google Gemini through a standalone runner.
 A scout designs the review for the specific change, one agent per angle hunts independently, the
 findings are grouped by root cause, and every root cause is handed to a skeptic whose
 job is to refute it. The report contains only what survived that attempt, labels
@@ -41,13 +42,15 @@ clean PRs drew no findings. See [Calibration](#calibration).
    the PR. Nothing is posted, committed or pushed without your confirmation.
 
 Optionally, add a `.claude/adv-review.json` with the project's install and test commands
-and its own review angles. See [Configuration](#configuration).
+and its own review angles. See [Configuration](#configuration). To run the review with
+Codex or Gemini, or from CI, see [Agents and models](#agents-and-models).
 
 ## Contents
 
 - [How it works](#how-it-works)
 - [Angles](#angles)
 - [Installation](#installation)
+- [Agents and models](#agents-and-models)
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Cost and footprint](#cost-and-footprint)
@@ -124,8 +127,73 @@ claude plugin install adv-review@yahampathchandika
 claude --plugin-dir ./adv-review
 ```
 
-**Platform.** The review runs on Claude Code's workflow runtime. The plugin does nothing
-on claude.ai or in Cowork.
+**Platform.** The plugin path runs on Claude Code's workflow runtime, so it does nothing
+on claude.ai or in Cowork. Other agents, and CI, use the standalone runner below.
+
+**Other agents (experimental)**
+
+The skill follows the open Agent Skills format, and the same review runs with the OpenAI
+Codex CLI or the Google Gemini CLI through `runner/review.mjs`. Clone this repository,
+then either symlink the skill into a place the agent reads skills from, or point the
+runner at the clone:
+
+```bash
+git clone https://github.com/YahampathChandika/adv-review.git
+ln -s "$PWD/adv-review/skills/review" .agents/skills/adv-review   # Codex and Gemini both read .agents/skills
+export ADV_REVIEW_HOME="$PWD/adv-review"                           # or this, for the skill to find the runner
+```
+
+The agent's own CLI must be installed and signed in: `npm install -g @openai/codex` and
+`codex login`, or `npm install -g @google/gemini-cli` and `gemini` once. The runner needs
+Node 20 or later and git, and `gh` for pull requests; it is for macOS and Linux. The
+symlink keeps the runner reachable from the skill; a copy of the skill folder alone
+does not include it.
+
+## Agents and models
+
+A review has two layers. The **session** is what you type the command into: it resolves
+the pull request, launches the review and reports. The **agents** do the reviewing: the
+scout, the finders, triage, the skeptics and the critic. With the plugin, the session is
+Claude Code and the agents run on Claude Code's workflow runtime. With the runner, the
+session is `node runner/review.mjs` and each agent is a headless CLI process, in its own
+git worktree, of the CLI you choose:
+
+```bash
+node runner/review.mjs 140                          # Claude agents, Opus by default
+node runner/review.mjs 140 --agent claude --model sonnet
+node runner/review.mjs 140 --agent codex            # GPT, whatever Codex defaults to
+node runner/review.mjs 140 --agent codex --model gpt-5.5
+node runner/review.mjs --branch --agent gemini      # the current branch, Gemini agents
+```
+
+`--agent` picks the vendor and `--model` the model within it. The `model` key of
+`.claude/adv-review.json` names a Claude model and applies to Claude agents only. The
+runner is also the way to run the review from CI or with an API key, since it needs no
+interactive session. Run it from a terminal: inside a Codex session, Codex's sandbox would
+cut the agents off from the network.
+
+| | Claude Code (plugin) | Claude (runner) | OpenAI Codex (runner) | Google Gemini (runner) |
+| :- | :- | :- | :- | :- |
+| How to run | `/adv-review:review …` | `runner/review.mjs … --agent claude` | `… --agent codex` | `… --agent gemini` |
+| From inside the agent's session | yes | yes (Claude Code) | no: run from a terminal | yes |
+| Review runs | yes | yes | yes | yes, untested against a real Gemini CLI |
+| Parallel agents | up to min(16, CPUs − 2) | `--jobs`, default up to 6 | `--jobs`, default 3 | `--jobs`, default 3 |
+| Worktree isolation | yes, under `.claude/worktrees` | yes, under the system temp dir | yes, temp dir | yes, temp dir |
+| Structured answers enforced | by the runtime | by the CLI (`--json-schema`) | by the CLI (`--output-schema`) | no: asked for in the prompt, checked by the runner, one retry |
+| `--no-run` enforced | by the prompt | restricted mode: read tools plus read-only git commands, everything else denied | OS sandbox, read-only | by the prompt and headless denial of unapproved tools |
+| Runs the project's tests | yes | yes | yes, sandboxed; no network unless `--network` | yes, unsandboxed |
+| Posting | the session asks; `--post` | `--post` via `gh` | same | same |
+| Resume after a lost agent | yes | no: rerun | no | no |
+| Cost visibility | the session's usage | dollars per agent | tokens | tokens, partial |
+| Calibration | 0.4.0: 17 of 18 on both sets | sample pending | sample pending | not run: no Gemini plan |
+| Status | supported | supported | experimental | experimental |
+
+Runner options beyond the skill's: `--jobs N` agents at once, `--timeout MIN` per agent
+(default 30), `--repo PATH`, `--keep-worktrees`, `--dry-run` (prepare and print the
+workflow arguments, run nothing), `--network` (Codex: allow network in the sandbox),
+`--max-turns N` and `--budget-usd X` (Claude, per agent), `--claude-permission-mode
+acceptEdits|auto`, `--allow-workspace-config` (Gemini: review a repository that carries
+its own `.gemini/` settings). `node runner/review.mjs --help` lists them all.
 
 ## Usage
 
@@ -215,12 +283,14 @@ above are the form to follow.
   resets. `--model sonnet` or the `model` key gives a cheaper, weaker run.
 - **A lost agent.** If an agent dies (a session limit, an API call that never answers),
   it is retried once. If the retry also fails, the run returns `incomplete` with the
-  agent named, never as clean. The run can be resumed: finished agents replay from cache
-  and only the lost one runs again.
-- **Disk.** Every agent gets a full worktree of the repository under
-  `.claude/worktrees/`. Ten agents on a large monorepo means ten copies. The session
-  removes them after the report; if a run is interrupted, remove that run's worktrees by
-  its `wf_…` id as the skill describes.
+  agent named, never as clean. With the plugin the run can be resumed: finished agents
+  replay from cache and only the lost one runs again. The runner has no resume; a run
+  that dies is rerun.
+- **Disk.** Every agent gets a full worktree of the repository: under
+  `.claude/worktrees/` with the plugin, under the system temp directory with the runner.
+  Ten agents on a large monorepo means ten copies. The session removes them after the
+  report; if a plugin run is interrupted, remove that run's worktrees by its `wf_…` id as
+  the skill describes.
 - **Editor.** The worktrees are inside the open folder. Exclude `**/.claude/worktrees`
   from the editor's file watcher and search, or a long run can exhaust its file handles.
 - **Machine.** Agents run the project's tests concurrently. Heavy suites can time out
@@ -234,6 +304,8 @@ above are the form to follow.
 - It does not fix anything. A review ends at the report.
 - A branch review covers committed work only, and has nothing to post to. Uncommitted
   changes are not reviewed.
+- The runner is for macOS and Linux, has no resume, and its Codex and Gemini backends
+  are experimental; the Gemini backend has not been run against a real Gemini CLI.
 
 ## Security
 
@@ -248,6 +320,19 @@ pass `--no-run`: every agent reads, nothing executes.
 
 Agents never commit, push, change branch, or post anything. The summary comment is
 posted by the session, after your confirmation, under your `gh` identity.
+
+**What each CLI enforces through the runner.** Claude agents run with `acceptEdits`
+permissions and Bash allowed, so they can install, test and write repro scripts in their
+worktree; that is permission-level, not operating-system, isolation, and your machine is
+as exposed as with the plugin. With `--no-run` they run in Claude's restricted mode with
+only read tools and read-only git commands allowed, and everything else denied without
+asking. Codex agents run in Codex's operating-system sandbox: read-only with `--no-run`,
+otherwise writes inside the worktree and no network unless `--network`. Gemini agents
+have no sandbox: `--no-run` is enforced by the prompt and by headless Gemini denying
+tools that would need approval, so pass `--no-run` for a PR you do not trust, and the
+runner refuses a repository that carries its own `.gemini/` or `.agents/` settings unless
+told `--allow-workspace-config`, because Gemini would honour them. Every Claude agent is
+started without the repository's own Claude settings, hooks and MCP servers.
 
 ## Calibration
 
@@ -276,6 +361,9 @@ of the second set were confirmed.
 The 0.2.0 false positives were all notes on weak tests over correct code; 0.3.0 made a
 blind test evidence on the defect it hides rather than a finding of its own.
 
+Through the runner, a four-PR sample (#4, #7, #14 and #11) is recorded per agent under
+`calibration/results/0.5.0-<agent>/`; the capability matrix above carries the result.
+
 ## Development
 
 The workflow script's tests exercise every failure path (dead agents, a wrong commit, a
@@ -286,10 +374,12 @@ spent:
 node --test
 ```
 
-`evals/review-smoke` is a `claude plugin eval` case that runs one real review from a
-fresh clone of the fixture. It is slow, spends agents, and needs `--scaffold` and
-`--allow-tools`; see its `case.yaml`. `calibration/run.sh` runs the full calibration
-pass headless; `calibration/README.md` describes it.
+`tests/runner.test.mjs` exercises the standalone runner with `tests/fixtures/fake-cli.mjs`
+standing in for every CLI, so no model is called there either. `evals/review-smoke` is a
+`claude plugin eval` case that runs one real review from a fresh clone of the fixture. It
+is slow, spends agents, and needs `--scaffold` and `--allow-tools`; see its `case.yaml`.
+`calibration/run.sh` runs the full calibration pass through the plugin path and
+`calibration/bench.sh` a sample through the runner; `calibration/README.md` describes both.
 
 Repository layout:
 
@@ -297,8 +387,9 @@ Repository layout:
 | :- | :- |
 | `skills/review/SKILL.md` | The skill: how the session resolves the PR, launches the workflow and reports |
 | `workflows/adversarial.js` | The workflow script: phases, prompts, budget, grouping and verification |
-| `tests/` | Tests for the workflow script and the calibration scorer |
-| `calibration/` | Answer key, scorer, runner and recorded results |
+| `runner/` | The standalone runner: the same script with Claude, Codex or Gemini CLI processes as agents |
+| `tests/` | Tests for the workflow script, the runner and the calibration scorer |
+| `calibration/` | Answer key, scorer, runners and recorded results |
 | `evals/` | The plugin eval case |
 | `examples/` | A sample project configuration |
 
