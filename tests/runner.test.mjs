@@ -531,4 +531,5 @@ test('the skill names the runner for agents without a Workflow tool', () => {
   assert.ok(skill.includes('`--agent codex|gemini|copilot` — run the review with that CLI'), 'the flag is in the argument list, so Claude Code sessions take it')
   assert.ok(skill.includes('`--agent claude,codex` — two or more agents'), 'a comma-separated list means a comparison')
   assert.ok(skill.includes('runner/compare.mjs'), 'the comparison is the compare command')
+  assert.ok(skill.includes('`--compare <file> <file>...` — no review'), 'results written earlier can be compared without a new review')
 })

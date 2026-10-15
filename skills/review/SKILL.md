@@ -49,7 +49,10 @@ The review runs one of three ways, and `--agent` decides:
   An entry may carry its model after a colon (`claude:sonnet`); pass the entry as it is,
   the runner splits it. Report the comparison as printed, then any run that came back
   `incomplete` and why. Claude agents go through the runner here too, so every column
-  carries the same information. A comparison never posts: with `--post`, say so and suggest posting one
+  carries the same information. With `--compare <file>...` and no review to run, only the
+  last command runs, on the files the user named: a result written by this skill's own
+  `--out` has no `runner` block, so its column is named after the file and shows no
+  model, time or cost. A comparison never posts: with `--post`, say so and suggest posting one
   agent's review instead.
 
 `$ROOT` is `ADV_REVIEW_HOME` if set, else `$CLAUDE_PLUGIN_ROOT` where Claude Code sets
@@ -91,7 +94,9 @@ vendor.
 `--post` — post the summary without asking at the end (see §6).
 `--include-preexisting` — post pre-existing findings too (see §5).
 `--out <path>` — also write the run's result JSON to this file, for the calibration
-scorer or the user's own tooling.
+scorer, the user's own tooling, or a later `--compare`.
+`--compare <file> <file>...` — no review: put result files written earlier with `--out`
+side by side and report that (see §0). Files of different commits are refused.
 `--model <name>` — the subagents' model for this run, over the project config's `model`
 and the Opus default (see Notes).
 `--no-run` — agents read the code but execute none of it (see Notes).

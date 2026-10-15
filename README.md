@@ -176,8 +176,9 @@ cut the agents off from the network.
 
 To compare agents on one pull request, `/adv-review:review 140 --agent claude,codex` in
 Claude Code reviews it once per agent and reports the comparison; a model may follow each
-agent after a colon, as in `--agent claude:sonnet,codex:gpt-5.5`. From a terminal, review
-it once per agent with `--out` and put the result files side by side:
+agent after a colon, as in `--agent claude:sonnet,codex:gpt-5.5`. Reviews run separately
+with `--out` can be compared later with `/adv-review:review --compare claude.json codex.json`.
+From a terminal, review it once per agent with `--out` and put the result files side by side:
 
 ```bash
 node runner/review.mjs 140 --agent claude --out claude.json
@@ -238,7 +239,8 @@ Run from a session in the repository, on any branch.
 | `--agent codex\|gemini\|copilot` | run the review with that CLI's agents through the runner instead, from inside Claude Code; see [Agents and models](#agents-and-models) |
 | `--agent claude,codex` | two or more agents, comma separated: review once per agent and report the comparison; never posts |
 | `--agent claude:sonnet,codex:gpt-5.5` | a model per agent, after a colon; `claude:sonnet,claude:opus` compares two models of one vendor |
-| `--out PATH` | also write the result JSON to a file |
+| `--out PATH` | also write the result JSON to a file, for the scorer or a later `--compare` |
+| `--compare FILE FILE...` | no review: put result files written earlier with `--out` side by side and report that |
 | `--include-preexisting` | include pre-existing findings in the posted comment |
 
 **During a run.** The first run asks for permission to run the workflow and shows its
