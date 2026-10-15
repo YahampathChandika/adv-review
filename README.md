@@ -184,8 +184,9 @@ node runner/compare.mjs claude.json codex.json
 The comparison lists what every agent found, what only some did, what one agent confirmed
 and another refuted, and the agents, minutes and cost of each run. Two findings count as
 one when they sit within five lines of each other and their titles share at least half
-their words; an agent with a different finding at the same place is noted. It compares
-reviews of one commit only. Which agent is right about a finding is still a person's call: a real
+their words; where another agent found something else at the same place, its finding is
+named underneath, since that may be one defect in other words or two defects on one line.
+It compares reviews of one commit only. Which agent is right about a finding is still a person's call: a real
 pull request has no answer key, which is what the [calibration set](#calibration) is for.
 
 | | Claude Code (plugin) | Claude (runner) | OpenAI Codex (runner) | Google Gemini (runner) |

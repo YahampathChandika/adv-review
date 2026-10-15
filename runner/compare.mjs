@@ -63,6 +63,7 @@ export function compare(reviews, { window = 5 } = {}) {
   const heads = [...new Set(reviews.map((r) => r.result.headSha ?? '(no commit recorded)'))]
   if (heads.length > 1) throw new CompareError(`the reviews are of different commits (${heads.map((h) => h.slice(0, 8)).join(', ')}); compare reviews of one commit`)
   const groups = []
+  const groupOf = new Map()
   for (const { name, result } of reviews) {
     for (const f of result.confirmed ?? []) {
       // The best-matching group this agent is not in yet, if any reads as the same finding.
@@ -76,8 +77,11 @@ export function compare(reviews, { window = 5 } = {}) {
         g.findings[name] = f
         if ((SEV[f.severity] ?? 9) < (SEV[g.severity] ?? 9)) g.severity = f.severity
         if (f.preexisting === true) g.preexisting = true
+        groupOf.set(f, g)
       } else {
-        groups.push({ file: f.file, line: f.line, title: f.title, severity: f.severity, preexisting: f.preexisting === true, by: [name], findings: { [name]: f }, refutedBy: [], alsoHere: [] })
+        const fresh = { file: f.file, line: f.line, title: f.title, severity: f.severity, preexisting: f.preexisting === true, by: [name], findings: { [name]: f }, refutedBy: [], alsoHere: [] }
+        groups.push(fresh)
+        groupOf.set(f, fresh)
       }
     }
   }
@@ -88,12 +92,17 @@ export function compare(reviews, { window = 5 } = {}) {
       }
     }
   }
-  // An agent that found something else at the same place is worth a note:
-  // the two wordings may be one defect after all, or one line two defects.
+  // An agent that found something else at the same place is named, with its
+  // finding, when that finding is not already paired with one of this group's
+  // agents: the two wordings may be one defect after all, or one line two defects.
   for (const g of groups) {
     for (const { name, result } of reviews) {
       if (g.by.includes(name)) continue
-      if ((result.confirmed ?? []).some((f) => Object.values(g.findings).some((x) => sameSite(x, f, window)))) g.alsoHere.push(name)
+      for (const f of result.confirmed ?? []) {
+        const h = groupOf.get(f)
+        if (h === g || h.by.some((n) => g.by.includes(n))) continue
+        if (Object.values(g.findings).some((x) => sameSite(x, f, window))) g.alsoHere.push({ name, file: f.file, line: f.line, title: f.title })
+      }
     }
   }
   groups.sort(bySeverity)
@@ -138,15 +147,18 @@ export function render({ target, headSha, runs, groups }) {
   out.push('', `Found by some (${some.length}):`)
   if (!some.length) out.push('  none')
   for (const g of some) {
-    const who = g.by.length === 1 ? `${g.by[0]} only` : g.by.join(' and ')
-    const notes = []
-    if (g.refutedBy.length) notes.push(`refuted by ${g.refutedBy.join(' and ')}`)
-    if (g.alsoHere.length) notes.push(`${g.alsoHere.join(' and ')} reports something else here`)
-    out.push(`${line(g)} — ${who}${notes.length ? `; ${notes.join('; ')}` : ''}`)
+    const who = `found by ${g.by.join(' and ')}${g.by.length === 1 ? ' only' : ''}`
+    out.push(`${line(g)} — ${who}${g.refutedBy.length ? `; refuted by ${g.refutedBy.join(' and ')}` : ''}`)
+    for (const other of g.alsoHere) out.push(`      ${other.name} found something else at this place: "${other.title}"${other.line !== g.line ? ` (${other.file}:${other.line})` : ''}`)
   }
   const disputed = groups.filter((g) => g.refutedBy.length)
   if (disputed.length) out.push('', `Confirmed by one agent and refuted by another: ${disputed.length}. A refutation is a verdict on the claim as that agent's skeptic saw it, not on the code; read both before trusting either.`)
-  out.push('', 'Two findings count as one when they sit within the window and their titles share half their words.', 'A real pull request has no answer key: which agent is right is a person\'s call.')
+  out.push(
+    '',
+    'Findings within a few lines of each other with similar titles count as one. Where another agent found',
+    'something else at the same place, its finding is named underneath: that may be the same defect in other',
+    "words, or two defects on one line. A real pull request has no answer key: which agent is right is a person's call.",
+  )
   return out.join('\n')
 }
 
