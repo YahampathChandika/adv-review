@@ -14,6 +14,7 @@ import { score } from '../calibration/lib.mjs'
 import * as claude from '../runner/backends/claude.mjs'
 import * as codex from '../runner/backends/codex.mjs'
 import { extractJson } from '../runner/backends/common.mjs'
+import * as copilot from '../runner/backends/copilot.mjs'
 import * as gemini from '../runner/backends/gemini.mjs'
 import { CliError, parseCli } from '../runner/cli.mjs'
 import { createEngine, createLimiter } from '../runner/engine.mjs'
@@ -27,7 +28,7 @@ import { createWorktrees, safeName } from '../runner/worktree.mjs'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FAKE = path.join(here, 'fixtures', 'fake-cli.mjs')
 const SKILL = path.join(here, '..', 'skills', 'review', 'SKILL.md')
-for (const agent of ['CLAUDE', 'CODEX', 'GEMINI']) process.env[`ADV_REVIEW_${agent}_BIN`] = FAKE
+for (const agent of ['CLAUDE', 'CODEX', 'GEMINI', 'COPILOT']) process.env[`ADV_REVIEW_${agent}_BIN`] = FAKE
 
 const git = (repo, ...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
 
@@ -237,6 +238,35 @@ test('gemini backend appends the schema instruction and extracts the first JSON 
   })
 })
 
+test('copilot backend asks for the JSON in the prompt, allows every tool only when code may run, and reads the answer from silent text output', async () => {
+  const schema = { type: 'object', required: ['reviewedCommit'], properties: { reviewedCommit: { type: 'string' } } }
+  const c = copilot.commandFor({ prompt: 'P', schema, addDirs: ['/d/diffs'], runCode: true, env: { ADV_REVIEW_COPILOT_BIN: FAKE } })
+  assert.equal(c.bin, FAKE)
+  assert.equal(c.args[0], '-p')
+  assert.ok(c.args[1].startsWith('P\n\nAnswer with ONLY one JSON object'))
+  for (const flag of ['-s', '--no-ask-user', '--allow-all-tools', '--add-dir=/d/diffs']) assert.ok(c.args.includes(flag), flag)
+  assert.ok(!c.args.some((a) => a.startsWith('--model')), 'no model unless the user named one')
+  assert.equal(c.env.GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS, 'false', "the repository's own extensions stay out of the agents")
+  const ro = copilot.commandFor({ prompt: 'P', schema, model: 'gpt-5.4', runCode: false, env: {} })
+  assert.ok(!ro.args.includes('--allow-all-tools'))
+  for (const flag of ['--allow-tool=shell(git:*)', '--deny-tool=write', '--model=gpt-5.4']) assert.ok(ro.args.includes(flag), flag)
+  const { repo, mainSha } = tempRepo()
+  await withFake({ mode: 'copilot' }, async () => {
+    const r = await copilot.run({ prompt: 'P', schema, model: null, cwd: repo, addDirs: [], runCode: true, timeoutMs: 10_000, env: { ...process.env, ADV_REVIEW_LABEL: 'scout', COPILOT_MODEL: 'gpt-5.4' } })
+    assert.equal(r.ok, true, r.reason)
+    assert.equal(r.parsed.reviewedCommit, mainSha, 'the JSON is picked out of the prose around it')
+    assert.equal(r.model, 'gpt-5.4', 'the model is COPILOT_MODEL when the CLI reports none')
+    assert.equal(r.cost, null, 'silent mode reports no usage')
+    const bad = await copilot.run({ prompt: 'P', schema, model: null, cwd: repo, addDirs: [], runCode: true, timeoutMs: 10_000, env: { ...process.env, ADV_REVIEW_LABEL: 'scout', ADV_REVIEW_FAKE_SCRIPT: '' } })
+    assert.equal(bad.ok, true)
+  })
+  await withFake({ mode: 'copilot', script: { scout: { __exitCode: 3 } } }, async () => {
+    const r = await copilot.run({ prompt: 'P', schema, model: null, cwd: repo, addDirs: [], runCode: true, timeoutMs: 10_000, env: { ...process.env, ADV_REVIEW_LABEL: 'scout' } })
+    assert.equal(r.ok, false)
+    assert.match(r.reason, /exit 3/)
+  })
+})
+
 // ---------------------------------------------------------------- engine
 
 test('an invalid answer is retried once in the backend with the validation error, then returns null', async () => {
@@ -340,15 +370,15 @@ test('parallel never rejects, keeps order, and hands back copies', async () => {
   assert.notEqual(out[0], obj)
 })
 
-test('the script\'s model is passed to claude only; codex and gemini get --model only when the user gave one', async () => {
+test('the script\'s model is passed to claude only; codex, gemini and copilot get --model only when the user gave one', async () => {
   const { repo, headSha } = tempRepo()
   const seen = []
   const fakeBackend = (name) => ({ name, run: async (o) => { seen.push([name, o.model]); return { ok: true, parsed: { reviewedCommit: headSha }, cost: null } } })
-  for (const [name, userModel] of [['claude', null], ['codex', null], ['codex', 'gpt-x'], ['gemini', 'pro']]) {
+  for (const [name, userModel] of [['claude', null], ['codex', null], ['codex', 'gpt-x'], ['gemini', 'pro'], ['copilot', null], ['copilot', 'gpt-5.4']]) {
     const { engine } = await engineOn({ repo, headSha, backend: fakeBackend(name), options: { userModel } })
     await engine.agent('P', { label: 'scout', schema: { type: 'object' }, model: 'sonnet' })
   }
-  assert.deepEqual(seen, [['claude', 'sonnet'], ['codex', null], ['codex', 'gpt-x'], ['gemini', 'pro']])
+  assert.deepEqual(seen, [['claude', 'sonnet'], ['codex', null], ['codex', 'gpt-x'], ['gemini', 'pro'], ['copilot', null], ['copilot', 'gpt-5.4']])
   const prepared = { target: { prs: [1] }, diffs: ['/d'], headSha, title: 't' }
   assert.equal(buildArgs(prepared, { agent: 'claude', model: null, run: true }, { model: 'sonnet' }).model, 'sonnet', 'a config model reaches Claude')
   assert.equal(buildArgs(prepared, { agent: 'codex', model: null, run: true }, { model: 'sonnet' }).model, undefined, 'a config model is a Claude name: not for codex')
@@ -491,6 +521,6 @@ test('every agent is told to carry on when its worktree is already at the head',
 test('the skill names the runner for agents without a Workflow tool', () => {
   const skill = readFileSync(SKILL, 'utf8')
   assert.ok(skill.includes('runner/review.mjs'))
-  assert.ok(skill.includes('--agent <codex|gemini|claude>'))
+  assert.ok(skill.includes('--agent <codex|gemini|copilot|claude>'))
   assert.ok(skill.includes('ADV_REVIEW_HOME'))
 })

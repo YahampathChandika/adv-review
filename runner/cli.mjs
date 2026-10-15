@@ -7,7 +7,7 @@ export const USAGE = `usage: node runner/review.mjs [<pr>...] [--branch [name]] 
   <pr>...                 pull request number(s); several = a stack, the last on top
   --branch [name]         review a branch (default: the current one) against its base
   --base <ref>            with --branch: what to measure against (default: the remote's default branch)
-  --agent <name>          claude (default), codex or gemini
+  --agent <name>          claude (default), codex, gemini or copilot
   --model <name>          the agents' model (Claude: default opus, or the project config's model)
   --agents <N>            the most agents the review may use (default: computed by the script)
   --jobs <N>              how many agents run at once (default: per agent)

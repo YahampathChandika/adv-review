@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `--agent copilot`: the GitHub Copilot CLI as a fourth agent, through `copilot -p` in
+  silent mode with the answer asked for in the prompt and checked by the runner. Its tool
+  allow-list enforces `--no-run` (git shell commands only, writes denied); the repository's
+  own Copilot extensions stay out of each agent. Experimental, built against a stand-in
+  CLI and not benchmarked: no Copilot plan.
+
 ## 0.5.1 — 2026-10-15
 
 - `runner/compare.mjs` puts reviews of one commit by different agents side by side:

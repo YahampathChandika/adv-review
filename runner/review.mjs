@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The standalone runner: the adversarial review with each agent launched as a
-// headless CLI process (claude, codex or gemini) in its own git worktree.
+// headless CLI process (claude, codex, gemini or copilot) in its own git worktree.
 // Everything the plugin's session does around the workflow, as code.
 import { mkdir, realpath, rm } from 'node:fs/promises'
 import os from 'node:os'

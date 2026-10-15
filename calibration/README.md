@@ -122,6 +122,7 @@ time, from a terminal:
 calibration/bench.sh ../adv-review-calibration claude        # Claude agents; MODEL=sonnet for comparability
 calibration/bench.sh ../adv-review-calibration codex         # the Codex CLI's default model
 calibration/bench.sh ../adv-review-calibration gemini
+calibration/bench.sh ../adv-review-calibration copilot
 ```
 
 `MODEL`, `JOBS` and `MAX_MIN` work as for `run.sh`; `EXTRA` adds runner flags, and

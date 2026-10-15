@@ -1,8 +1,9 @@
 import * as claude from './claude.mjs'
 import * as codex from './codex.mjs'
+import * as copilot from './copilot.mjs'
 import * as gemini from './gemini.mjs'
 
-export const BACKENDS = { claude, codex, gemini }
+export const BACKENDS = { claude, codex, gemini, copilot }
 export const AGENTS = Object.keys(BACKENDS)
 
 export function backendFor(agent) {

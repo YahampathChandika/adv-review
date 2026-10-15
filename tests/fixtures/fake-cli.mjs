@@ -1,8 +1,8 @@
-// A stand-in for the claude, codex and gemini CLIs, for the runner's tests: it
+// A stand-in for the claude, codex, gemini and copilot CLIs, for the runner's tests: it
 // answers by the label the engine put in ADV_REVIEW_LABEL, in the output shape
 // of the CLI named by ADV_REVIEW_FAKE_MODE, and logs each invocation.
 //
-//   ADV_REVIEW_FAKE_MODE    claude | codex | gemini (default claude)
+//   ADV_REVIEW_FAKE_MODE    claude | codex | gemini | copilot (default claude)
 //   ADV_REVIEW_FAKE_SCRIPT  JSON file: { "<label or kind>": answer | [answer per attempt] }
 //                           an answer may carry __exitCode, __sleepMs, __text (raw output instead of JSON)
 //   ADV_REVIEW_FAKE_LOG     JSONL file to append { pid, label, attempt, argv, cwd, start, end } to
@@ -92,6 +92,9 @@ if (mode === 'claude') {
   ]) {
     process.stdout.write(`${JSON.stringify(e)}\n`)
   }
+} else if (mode === 'copilot') {
+  // Silent mode: the response alone, as text, with whatever prose the model adds.
+  process.stdout.write(`Here is the answer you asked for:\n${text}\n`)
 } else {
   process.stdout.write(`${JSON.stringify({ response: `Here you go:\n\`\`\`json\n${text}\n\`\`\``, stats: { models: { 'fake-gemini': { tokens: { input: 100, output: 20 } } } } })}\n`)
 }

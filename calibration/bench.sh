@@ -5,7 +5,7 @@
 #   calibration/bench.sh <clone> <agent> [<pr>...]        default PRs: 4 7 14 11
 #
 #   <clone>   a clone of the fixture on main, with its GitHub origin
-#   <agent>   claude | codex | gemini
+#   <agent>   claude | codex | gemini | copilot
 #   MODEL     the agents' model (Claude: sonnet for comparability; others: the CLI's default)
 #   JOBS      agents at once (default: the backend's)
 #   MAX_MIN   per-agent timeout in minutes (default 45)
