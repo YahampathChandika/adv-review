@@ -4,7 +4,8 @@
 
 - `/adv-review:review 140 --agent claude,codex`: two or more agents, comma separated,
   review the pull request once each through the runner and the session reports the
-  comparison. Never posts.
+  comparison. Never posts. A model may follow each agent after a colon,
+  `--agent claude:sonnet,codex:gpt-5.5`; the runner's `--agent` takes the same form.
 
 ## 0.5.3 — 2026-10-15
 

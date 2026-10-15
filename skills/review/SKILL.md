@@ -46,9 +46,10 @@ The review runs one of three ways, and `--agent` decides:
   node "$ROOT/runner/compare.mjs" <tmp>/claude.json <tmp>/codex.json
   ```
 
-  Report the comparison as printed, then any run that came back `incomplete` and why.
-  Claude agents go through the runner here too, so every column carries the same
-  information. A comparison never posts: with `--post`, say so and suggest posting one
+  An entry may carry its model after a colon (`claude:sonnet`); pass the entry as it is,
+  the runner splits it. Report the comparison as printed, then any run that came back
+  `incomplete` and why. Claude agents go through the runner here too, so every column
+  carries the same information. A comparison never posts: with `--post`, say so and suggest posting one
   agent's review instead.
 
 `$ROOT` is `ADV_REVIEW_HOME` if set, else `$CLAUDE_PLUGIN_ROOT` where Claude Code sets
@@ -84,6 +85,9 @@ runner instead of Claude Code's runtime (see §0); `--model` then names a model 
 vendor.
 `--agent claude,codex` — two or more agents, comma separated: review once per agent
 through the runner and report the comparison (see §0). Never posts.
+`--agent claude:sonnet,codex:gpt-5.5` — a model per agent, after a colon; the runner
+takes the same form. `--agent claude:sonnet,claude:opus` compares two models of one
+vendor.
 `--post` — post the summary without asking at the end (see §6).
 `--include-preexisting` — post pre-existing findings too (see §5).
 `--out <path>` — also write the run's result JSON to this file, for the calibration

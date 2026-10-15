@@ -163,7 +163,7 @@ git worktree, of the CLI you choose:
 node runner/review.mjs 140                          # Claude agents, Opus by default
 node runner/review.mjs 140 --agent claude --model sonnet
 node runner/review.mjs 140 --agent codex            # GPT, whatever Codex defaults to
-node runner/review.mjs 140 --agent codex --model gpt-5.5
+node runner/review.mjs 140 --agent codex --model gpt-5.5    # or --agent codex:gpt-5.5
 node runner/review.mjs --branch --agent gemini      # the current branch, Gemini agents
 node runner/review.mjs 140 --agent copilot          # Copilot agents, the CLI's default model
 ```
@@ -175,7 +175,8 @@ interactive session. Run it from a terminal: inside a Codex session, Codex's san
 cut the agents off from the network.
 
 To compare agents on one pull request, `/adv-review:review 140 --agent claude,codex` in
-Claude Code reviews it once per agent and reports the comparison. From a terminal, review
+Claude Code reviews it once per agent and reports the comparison; a model may follow each
+agent after a colon, as in `--agent claude:sonnet,codex:gpt-5.5`. From a terminal, review
 it once per agent with `--out` and put the result files side by side:
 
 ```bash
@@ -236,6 +237,7 @@ Run from a session in the repository, on any branch.
 | `--post` | post the summary comment without asking; pull requests only |
 | `--agent codex\|gemini\|copilot` | run the review with that CLI's agents through the runner instead, from inside Claude Code; see [Agents and models](#agents-and-models) |
 | `--agent claude,codex` | two or more agents, comma separated: review once per agent and report the comparison; never posts |
+| `--agent claude:sonnet,codex:gpt-5.5` | a model per agent, after a colon; `claude:sonnet,claude:opus` compares two models of one vendor |
 | `--out PATH` | also write the result JSON to a file |
 | `--include-preexisting` | include pre-existing findings in the posted comment |
 

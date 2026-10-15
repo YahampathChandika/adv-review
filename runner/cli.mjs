@@ -7,7 +7,7 @@ export const USAGE = `usage: node runner/review.mjs [<pr>...] [--branch [name]] 
   <pr>...                 pull request number(s); several = a stack, the last on top
   --branch [name]         review a branch (default: the current one) against its base
   --base <ref>            with --branch: what to measure against (default: the remote's default branch)
-  --agent <name>          claude (default), codex, gemini or copilot
+  --agent <name>[:<model>]  claude (default), codex, gemini or copilot, with its model after a colon
   --model <name>          the agents' model (Claude: default opus, or the project config's model)
   --agents <N>            the most agents the review may use (default: computed by the script)
   --jobs <N>              how many agents run at once (default: per agent)
@@ -95,7 +95,11 @@ export function parseCli(argv) {
   const branchMode = v.branch !== undefined
   if (branchMode && prs.length) throw new CliError('give pull request numbers or --branch, not both')
   if (branchMode && v.post) throw new CliError('a branch review has nothing to post to: drop --post or review the pull request')
-  if (!AGENTS.includes(v.agent)) throw new CliError(`--agent must be one of ${AGENTS.join(', ')}, got ${JSON.stringify(v.agent)}`)
+  // `--agent codex:gpt-5.5` carries the model with the agent, as the skill's list form does.
+  const [agentName, ...modelParts] = String(v.agent).split(':')
+  const agentModel = modelParts.join(':') || null
+  if (!AGENTS.includes(agentName)) throw new CliError(`--agent must be one of ${AGENTS.join(', ')}, got ${JSON.stringify(v.agent)}`)
+  if (agentModel && v.model !== undefined && v.model !== agentModel) throw new CliError(`the model is given twice: --agent ${v.agent} and --model ${v.model}`)
   if (!['acceptEdits', 'auto'].includes(v['claude-permission-mode'])) throw new CliError('--claude-permission-mode must be acceptEdits or auto')
   const budget = v['budget-usd'] === undefined ? null : Number(v['budget-usd'])
   if (budget !== null && !(budget > 0)) throw new CliError('--budget-usd must be a positive number')
@@ -105,8 +109,8 @@ export function parseCli(argv) {
     branch: branchMode ? v.branch || null : undefined,
     branchMode,
     base: v.base ?? null,
-    agent: v.agent,
-    model: v.model ?? null,
+    agent: agentName,
+    model: v.model ?? agentModel,
     agents: whole('agents', v.agents, { min: 4 }),
     jobs: whole('jobs', v.jobs),
     run: !v['no-run'],
