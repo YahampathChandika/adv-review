@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-10-15
 
 - `runner/compare.mjs` puts reviews of one commit by different agents side by side:
   what every agent found, what only some did, what one confirmed and another refuted,

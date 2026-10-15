@@ -443,7 +443,7 @@ test('--out writes the result with a runner block the scorer ignores', async () 
     assert.deepEqual(result.target, { branch: 'feature', base: 'main' })
     assert.equal(result.runner.agent, 'claude')
     assert.equal(result.runner.model, 'fake-claude')
-    assert.equal(result.runner.version, '0.5.0')
+    assert.equal(result.runner.version, JSON.parse(await readFile(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')).version, 'the runner records the plugin version')
     assert.ok(result.runner.calls.length >= 4)
     assert.equal(result.runner.intent, 'commits')
     const manifest = { repository: 'o/r', defects: [{ id: 'D1', pr: 1, angle: 'correctness', severity: 'high', sites: [{ file: 'src/a.ts', lines: [10, 10] }] }], clean: [] }
