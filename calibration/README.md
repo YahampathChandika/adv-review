@@ -135,7 +135,13 @@ node calibration/score.mjs --results calibration/results/0.5.0-codex
 Each result carries a `runner` block naming the agent, the model the CLI reported, the
 CLI version, every call with its duration and cost, and the elapsed time. A sample this
 small is indicative, not a score; it shows whether the review works at all with that
-agent and roughly what it costs.
+agent and roughly what it costs. `bench-table.mjs` turns result folders into the
+Markdown table the README carries, one row per PR with the verdict and what it spent;
+for a plugin-path folder it reads the cost from the session log beside each result:
+
+```
+node calibration/bench-table.mjs --results calibration/results/0.4.0 --results calibration/results/0.5.0-codex
+```
 
 ## What the numbers mean
 
