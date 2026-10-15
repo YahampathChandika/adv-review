@@ -172,6 +172,22 @@ runner is also the way to run the review from CI or with an API key, since it ne
 interactive session. Run it from a terminal: inside a Codex session, Codex's sandbox would
 cut the agents off from the network.
 
+To compare agents on one pull request, review it once per agent with `--out` and put the
+result files side by side:
+
+```bash
+node runner/review.mjs 140 --agent claude --out claude.json
+node runner/review.mjs 140 --agent codex --out codex.json
+node runner/compare.mjs claude.json codex.json
+```
+
+The comparison lists what every agent found, what only some did, what one agent confirmed
+and another refuted, and the agents, minutes and cost of each run. Two findings count as
+one when they sit within five lines of each other and their titles share at least half
+their words; an agent with a different finding at the same place is noted. It compares
+reviews of one commit only. Which agent is right about a finding is still a person's call: a real
+pull request has no answer key, which is what the [calibration set](#calibration) is for.
+
 | | Claude Code (plugin) | Claude (runner) | OpenAI Codex (runner) | Google Gemini (runner) |
 | :- | :- | :- | :- | :- |
 | How to run | `/adv-review:review …` | `runner/review.mjs … --agent claude` | `… --agent codex` | `… --agent gemini` |
@@ -412,7 +428,7 @@ Repository layout:
 | :- | :- |
 | `skills/review/SKILL.md` | The skill: how the session resolves the PR, launches the workflow and reports |
 | `workflows/adversarial.js` | The workflow script: phases, prompts, budget, grouping and verification |
-| `runner/` | The standalone runner: the same script with Claude, Codex or Gemini CLI processes as agents |
+| `runner/` | The standalone runner: the same script with Claude, Codex or Gemini CLI processes as agents; `compare.mjs` puts reviews by different agents side by side |
 | `tests/` | Tests for the workflow script, the runner and the calibration scorer |
 | `calibration/` | Answer key, scorer, runners and recorded results |
 | `evals/` | The plugin eval case |

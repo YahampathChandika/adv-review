@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `runner/compare.mjs` puts reviews of one commit by different agents side by side:
+  what every agent found, what only some did, what one confirmed and another refuted,
+  and the agents, minutes and cost of each run.
+
 ## 0.5.0 — 2026-10-15
 
 Benchmarked through the runner on a four-PR sample of the fixture (#4, #7, #14, #11),
