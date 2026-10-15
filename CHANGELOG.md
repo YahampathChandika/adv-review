@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 0.5.0
+## 0.5.0 — 2026-10-15
 
 Benchmarked through the runner on a four-PR sample of the fixture (#4, #7, #14, #11),
 next to the 0.4.0 plugin pass on the same PRs. Claude agents on Sonnet: 4 of 4 planted
