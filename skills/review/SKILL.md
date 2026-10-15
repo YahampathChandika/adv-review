@@ -23,7 +23,7 @@ invoking this skill is the opt-in, for up to the agent count below.
 
 ## 0. Which path
 
-The review runs one of two ways, and `--agent` decides:
+The review runs one of three ways, and `--agent` decides:
 
 - **Claude agents on Claude Code's workflow runtime** — the default in Claude Code, and
   `--agent claude` there: follow §1–§6 below. This path can resume a lost run.
@@ -35,6 +35,21 @@ The review runs one of two ways, and `--agent` decides:
   ```
   node "$ROOT/runner/review.mjs" <the same arguments the user gave> --agent <codex|gemini|copilot|claude> --out <tmp>/result.json
   ```
+
+- **Two or more agents, compared** — `--agent claude,codex` (any of the four, comma
+  separated): run the runner once per agent, all at the same time, each with its own
+  `--out`, then put the results side by side and report that instead of §5:
+
+  ```
+  node "$ROOT/runner/review.mjs" <the same arguments> --agent claude --out <tmp>/claude.json
+  node "$ROOT/runner/review.mjs" <the same arguments> --agent codex --out <tmp>/codex.json
+  node "$ROOT/runner/compare.mjs" <tmp>/claude.json <tmp>/codex.json
+  ```
+
+  Report the comparison as printed, then any run that came back `incomplete` and why.
+  Claude agents go through the runner here too, so every column carries the same
+  information. A comparison never posts: with `--post`, say so and suggest posting one
+  agent's review instead.
 
 `$ROOT` is `ADV_REVIEW_HOME` if set, else `$CLAUDE_PLUGIN_ROOT` where Claude Code sets
 it (the installed plugin), else the directory two levels above this SKILL.md
@@ -67,6 +82,8 @@ first of `origin/main`, `origin/master`, `main`, `master` that exists.
 `--agent codex|gemini|copilot` — run the review with that CLI's agents through the
 runner instead of Claude Code's runtime (see §0); `--model` then names a model of that
 vendor.
+`--agent claude,codex` — two or more agents, comma separated: review once per agent
+through the runner and report the comparison (see §0). Never posts.
 `--post` — post the summary without asking at the end (see §6).
 `--include-preexisting` — post pre-existing findings too (see §5).
 `--out <path>` — also write the run's result JSON to this file, for the calibration

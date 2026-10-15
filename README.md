@@ -174,8 +174,9 @@ runner is also the way to run the review from CI or with an API key, since it ne
 interactive session. Run it from a terminal: inside a Codex session, Codex's sandbox would
 cut the agents off from the network.
 
-To compare agents on one pull request, review it once per agent with `--out` and put the
-result files side by side:
+To compare agents on one pull request, `/adv-review:review 140 --agent claude,codex` in
+Claude Code reviews it once per agent and reports the comparison. From a terminal, review
+it once per agent with `--out` and put the result files side by side:
 
 ```bash
 node runner/review.mjs 140 --agent claude --out claude.json
@@ -234,6 +235,7 @@ Run from a session in the repository, on any branch.
 | `--no-run` | agents read the code but execute none of it; see [Security](#security) |
 | `--post` | post the summary comment without asking; pull requests only |
 | `--agent codex\|gemini\|copilot` | run the review with that CLI's agents through the runner instead, from inside Claude Code; see [Agents and models](#agents-and-models) |
+| `--agent claude,codex` | two or more agents, comma separated: review once per agent and report the comparison; never posts |
 | `--out PATH` | also write the result JSON to a file |
 | `--include-preexisting` | include pre-existing findings in the posted comment |
 
