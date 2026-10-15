@@ -8,6 +8,9 @@
   `--agent claude:sonnet,codex:gpt-5.5`; the runner's `--agent` takes the same form.
 - `/adv-review:review --compare claude.json codex.json`: no review; results written
   earlier with `--out` put side by side.
+- The runner takes the same list: `node runner/review.mjs 140 --agent claude:sonnet,codex:gpt-5.5`
+  reviews once per agent at the same time and prints the comparison; `--out results.json`
+  keeps `results.<agent>.json` per agent.
 
 ## 0.5.3 — 2026-10-15
 

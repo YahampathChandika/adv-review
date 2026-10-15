@@ -4,10 +4,13 @@ import { AGENTS } from './backends/index.mjs'
 
 export const USAGE = `usage: node runner/review.mjs [<pr>...] [--branch [name]] [--base <ref>] [options]
 
+  Several agents, --agent claude:sonnet,codex:gpt-5.5, review once each at the same time
+  and print the comparison; --out results.json then keeps results.<agent>.json per agent.
+
   <pr>...                 pull request number(s); several = a stack, the last on top
   --branch [name]         review a branch (default: the current one) against its base
   --base <ref>            with --branch: what to measure against (default: the remote's default branch)
-  --agent <name>[:<model>]  claude (default), codex, gemini or copilot, with its model after a colon
+  --agent <name>[:<model>][,<name>[:<model>]...]  claude (default), codex, gemini or copilot, a model after a colon; several to compare
   --model <name>          the agents' model (Claude: default opus, or the project config's model)
   --agents <N>            the most agents the review may use (default: computed by the script)
   --jobs <N>              how many agents run at once (default: per agent)
@@ -95,11 +98,24 @@ export function parseCli(argv) {
   const branchMode = v.branch !== undefined
   if (branchMode && prs.length) throw new CliError('give pull request numbers or --branch, not both')
   if (branchMode && v.post) throw new CliError('a branch review has nothing to post to: drop --post or review the pull request')
-  // `--agent codex:gpt-5.5` carries the model with the agent, as the skill's list form does.
-  const [agentName, ...modelParts] = String(v.agent).split(':')
-  const agentModel = modelParts.join(':') || null
-  if (!AGENTS.includes(agentName)) throw new CliError(`--agent must be one of ${AGENTS.join(', ')}, got ${JSON.stringify(v.agent)}`)
-  if (agentModel && v.model !== undefined && v.model !== agentModel) throw new CliError(`the model is given twice: --agent ${v.agent} and --model ${v.model}`)
+  // `--agent codex:gpt-5.5` carries the model with the agent; a comma-separated list
+  // reviews once per agent and compares.
+  const runs = String(v.agent)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [agent, ...modelParts] = entry.split(':')
+      if (!AGENTS.includes(agent)) throw new CliError(`--agent must be one of ${AGENTS.join(', ')}, got ${JSON.stringify(entry)}`)
+      return { agent, model: modelParts.join(':') || null }
+    })
+  if (!runs.length) throw new CliError('--agent needs a name')
+  if (runs.length > 1) {
+    if (v.post) throw new CliError('a comparison never posts: drop --post, or review with one agent')
+    if (v.model !== undefined) throw new CliError('with several agents, name each model after its agent: --agent claude:sonnet,codex:gpt-5.5')
+  } else if (runs[0].model && v.model !== undefined && v.model !== runs[0].model) throw new CliError(`the model is given twice: --agent ${v.agent} and --model ${v.model}`)
+  const agentName = runs[0].agent
+  const agentModel = runs[0].model
   if (!['acceptEdits', 'auto'].includes(v['claude-permission-mode'])) throw new CliError('--claude-permission-mode must be acceptEdits or auto')
   const budget = v['budget-usd'] === undefined ? null : Number(v['budget-usd'])
   if (budget !== null && !(budget > 0)) throw new CliError('--budget-usd must be a positive number')
@@ -111,6 +127,7 @@ export function parseCli(argv) {
     base: v.base ?? null,
     agent: agentName,
     model: v.model ?? agentModel,
+    runs: runs.length > 1 ? runs : [{ agent: agentName, model: v.model ?? agentModel }],
     agents: whole('agents', v.agents, { min: 4 }),
     jobs: whole('jobs', v.jobs),
     run: !v['no-run'],

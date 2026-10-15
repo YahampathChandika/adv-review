@@ -76,7 +76,7 @@ export function createEngine({ backend, worktrees, limiter, options = {}, log = 
             addDirs: options.addDirs ?? [],
             runCode: options.runCode !== false,
             timeoutMs: options.timeoutMs,
-            env: { ...process.env, ADV_REVIEW_LABEL: label, ADV_REVIEW_ATTEMPT: String(attempt) },
+            env: { ...process.env, ADV_REVIEW_LABEL: label, ADV_REVIEW_ATTEMPT: String(attempt), ADV_REVIEW_AGENT: backend.name },
             maxTurns: options.maxTurns,
             budgetUsd: options.budgetUsd,
             network: options.network === true,

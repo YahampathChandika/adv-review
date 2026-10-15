@@ -20,7 +20,7 @@ import { CliError, parseCli } from '../runner/cli.mjs'
 import { createEngine, createLimiter } from '../runner/engine.mjs'
 import { loadWorkflow } from '../runner/load-script.mjs'
 import { buildArgs, intentFrom } from '../runner/prepare.mjs'
-import { main } from '../runner/review.mjs'
+import { labelFor, main, outFileFor } from '../runner/review.mjs'
 import { describe, validate } from '../runner/schema.mjs'
 import { liveCount } from '../runner/spawn.mjs'
 import { createWorktrees, safeName } from '../runner/worktree.mjs'
@@ -425,6 +425,16 @@ test('--post with --branch is refused before anything is spent', async () => {
   assert.equal(parseCli(['--agent', 'claude:sonnet', '--model', 'sonnet']).model, 'sonnet')
   assert.throws(() => parseCli(['--agent', 'claude:sonnet', '--model', 'opus']), /given twice/)
   assert.throws(() => parseCli(['--agent', 'gpt:x']), /--agent must be one of/)
+  const two = parseCli(['4', '--agent', 'claude:sonnet, codex:gpt-5.5'])
+  assert.deepEqual(two.runs, [{ agent: 'claude', model: 'sonnet' }, { agent: 'codex', model: 'gpt-5.5' }], 'a list is one run per agent')
+  assert.deepEqual(parseCli(['4', '--agent', 'codex:gpt-5.5']).runs, [{ agent: 'codex', model: 'gpt-5.5' }], 'one agent is a list of one')
+  assert.throws(() => parseCli(['4', '--agent', 'claude,codex', '--post']), /never posts/)
+  assert.throws(() => parseCli(['4', '--agent', 'claude,codex', '--model', 'x']), /name each model after its agent/)
+  assert.throws(() => parseCli(['4', '--agent', 'claude,gpt']), /--agent must be one of/)
+  assert.equal(labelFor({ agent: 'claude', model: 'claude-sonnet-5' }), 'claude-claude-sonnet-5')
+  assert.equal(labelFor({ agent: 'codex', model: null }), 'codex')
+  assert.equal(outFileFor('results.json', 'codex'), 'results.codex.json')
+  assert.equal(outFileFor('out/results', 'claude-sonnet'), 'out/results.claude-sonnet.json')
   assert.throws(() => parseCli(['--agents', '3']), /at least 4/)
   assert.throws(() => parseCli(['abc']), /not a pull request number/)
   const c = parseCli(['136', '140', '--branch'].slice(0, 2))
@@ -443,6 +453,38 @@ test('--post with --branch is refused before anything is spent', async () => {
     assert.ok(logs[0].includes('nothing to post'))
     assert.equal(calls().length, 0)
   })
+})
+
+test('several agents review once each at the same time, keep a result per agent, and print the comparison', async () => {
+  const { repo, headSha } = tempRepo()
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'adv-cmp-'))
+  const out = path.join(dir, 'results.json')
+  await withFake({ mode: '', script: { 'find:correctness': { findings: [finding()] } } }, async ({ calls }) => {
+    const printed = []
+    const logs = []
+    const code = await main(['--branch', 'feature', '--base', 'main', '--repo', repo, '--agent', 'claude:sonnet,codex', '--agents', '20', '--out', out], { log: (l) => logs.push(l), stdout: (s) => printed.push(s) })
+    assert.equal(code, 0, logs.join('\n'))
+    const a = JSON.parse(await readFile(path.join(dir, 'results.claude-sonnet.json'), 'utf8'))
+    const b = JSON.parse(await readFile(path.join(dir, 'results.codex.json'), 'utf8'))
+    assert.equal(a.runner.agent, 'claude')
+    assert.equal(a.runner.model, 'fake-claude')
+    assert.equal(b.runner.agent, 'codex')
+    assert.equal(b.headSha, headSha)
+    assert.ok(a.budget.used >= 4 && b.budget.used >= 4, 'both reviews ran')
+    assert.equal(a.status, 'complete', JSON.stringify(a.incomplete))
+    assert.equal(b.status, 'complete', JSON.stringify(b.incomplete))
+    const text = printed.join('\n')
+    assert.match(text, /Compared 2 reviews of branch feature at /)
+    assert.match(text, /claude-sonnet {2}fake-claude; \d+ agents, \d+ min, \$\d/)
+    assert.match(text, /codex +fake-codex; \d+ agents, \d+ min, [\d.]+M tokens/)
+    assert.match(text, /Found by every agent \(1\):\n {2}\[[A-Z]+\] \S+ A defect/)
+    assert.ok(logs.some((l) => l.startsWith('[codex] runner: start')), 'each run logs under its label')
+    const modes = new Set(calls().map((c) => c.argv.includes('exec') ? 'codex' : 'claude'))
+    assert.deepEqual([...modes].sort(), ['claude', 'codex'], 'each run spawned its own CLI')
+    assert.ok(calls().length >= 8)
+  })
+  assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1, 'no worktree left behind')
+  await rm(dir, { recursive: true, force: true })
 })
 
 test('--dry-run prepares, prints args and a command line, and spawns nothing', async () => {

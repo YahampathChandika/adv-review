@@ -2,7 +2,7 @@
 // answers by the label the engine put in ADV_REVIEW_LABEL, in the output shape
 // of the CLI named by ADV_REVIEW_FAKE_MODE, and logs each invocation.
 //
-//   ADV_REVIEW_FAKE_MODE    claude | codex | gemini | copilot (default claude)
+//   ADV_REVIEW_FAKE_MODE    claude | codex | gemini | copilot (default: ADV_REVIEW_AGENT, the backend that spawned it, else claude)
 //   ADV_REVIEW_FAKE_SCRIPT  JSON file: { "<label or kind>": answer | [answer per attempt] }
 //                           an answer may carry __exitCode, __sleepMs, __text (raw output instead of JSON)
 //   ADV_REVIEW_FAKE_LOG     JSONL file to append { pid, label, attempt, argv, cwd, start, end } to
@@ -12,7 +12,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const env = process.env
-const mode = env.ADV_REVIEW_FAKE_MODE ?? 'claude'
+const mode = env.ADV_REVIEW_FAKE_MODE || env.ADV_REVIEW_AGENT || 'claude'
 const label = env.ADV_REVIEW_LABEL ?? ''
 const kind = label.split(':')[0]
 const attempt = Number(env.ADV_REVIEW_ATTEMPT ?? 1)

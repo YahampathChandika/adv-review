@@ -178,12 +178,14 @@ To compare agents on one pull request, `/adv-review:review 140 --agent claude,co
 Claude Code reviews it once per agent and reports the comparison; a model may follow each
 agent after a colon, as in `--agent claude:sonnet,codex:gpt-5.5`. Reviews run separately
 with `--out` can be compared later with `/adv-review:review --compare claude.json codex.json`.
-From a terminal, review it once per agent with `--out` and put the result files side by side:
+From a terminal, the runner does the same in one command, or the reviews can be run one
+at a time with `--out` and compared afterwards:
 
 ```bash
-node runner/review.mjs 140 --agent claude --out claude.json
+node runner/review.mjs 140 --agent claude:sonnet,codex:gpt-5.5 --out results.json   # both at once, then the comparison; keeps results.<agent>.json
+node runner/review.mjs 140 --agent claude --out claude.json                        # or one at a time...
 node runner/review.mjs 140 --agent codex --out codex.json
-node runner/compare.mjs claude.json codex.json
+node runner/compare.mjs claude.json codex.json                                     # ...and compared later
 ```
 
 The comparison lists what every agent found, what only some did, what one agent confirmed
@@ -210,7 +212,8 @@ pull request has no answer key, which is what the [calibration set](#calibration
 | Calibration | 0.4.0: 17 of 18 on both sets; 4 of 4 on the sample, 7 of 7 true | sample: 4 of 4 planted defects, 6 of 7 findings true, $16 on Sonnet | sample: 4 of 4 planted defects, 21 of 22 findings true | not run: no Gemini plan | not run: no Copilot plan |
 | Status | supported | supported | experimental | experimental | experimental |
 
-Runner options beyond the skill's: `--jobs N` agents at once, `--timeout MIN` per agent
+Runner options beyond the skill's: `--jobs N` agents at once (per agent in a comparison, so
+two agents run up to twice that), `--timeout MIN` per agent
 (default 30), `--repo PATH`, `--keep-worktrees`, `--dry-run` (prepare and print the
 workflow arguments, run nothing), `--network` (Codex: allow network in the sandbox),
 `--max-turns N` and `--budget-usd X` (Claude, per agent), `--claude-permission-mode
