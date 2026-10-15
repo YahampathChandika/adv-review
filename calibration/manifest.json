@@ -1101,6 +1101,51 @@
         }
       ],
       "note": "True, medium, and not planted. The running total is kept only by the new code, and migration 003 builds it once. During the rollout window docs/deploy.md describes, and after any rollback, copies of the previous release take deposits without bumping it, and nothing ever recomputes it from the accounts: the summary stays wrong for good. Separate from D9, which is the new code's own withdrawals."
+    },
+    {
+      "pr": 4,
+      "truth": true,
+      "title": "Null overdraft body returns 500",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            92,
+            92
+          ]
+        }
+      ],
+      "note": "True, and not planted. The new overdraft route reads body.overdraftCents without checking that the parsed body is an object, so a literal null JSON body answers 500 instead of 400: the same class as the null-body findings on #3, #7, #9 and #16. Found by the Codex benchmark. Medium is fair."
+    },
+    {
+      "pr": 7,
+      "truth": true,
+      "title": "Accepted names can create no file; Unicode characters are miscounted",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            103,
+            103
+          ]
+        }
+      ],
+      "note": "True, low. The length check counts UTF-16 units and accepts names that are not file names (a NUL byte, a Windows device name), so a name the API accepts can fail to create a CSV, and a 33-character name of emoji is refused as too long. Two findings from the Codex benchmark at this line; both hold, neither matters much."
+    },
+    {
+      "pr": 7,
+      "truth": true,
+      "title": "Body errors bypass sign-in warnings",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            121,
+            121
+          ]
+        }
+      ],
+      "note": "True, low. The body is parsed before requireUser runs, so a request with a bad token and a malformed body is refused with 400 and never logged as a failed sign-in, which the PR added the warning for. Found by the Codex benchmark."
     }
   ],
   "bases": {

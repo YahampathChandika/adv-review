@@ -94,6 +94,21 @@ test('a hand adjudication settles an unplanted finding either way; unadjudicated
   assert.deepEqual(other.rows[0].unplanned, ['test/x.test.js:32 t test/x.test.js [high]'])
 })
 
+test('a ruling that contains the line outranks a ruling that is merely near it', () => {
+  const adjudicated = [
+    { pr: 1, truth: true, title: 'null body', sites: [{ file: 'src/r.js', lines: [102, 102] }] },
+    { pr: 1, truth: false, title: 'style', sites: [{ file: 'src/r.js', lines: [105, 105] }] },
+  ]
+  const results = [{ pr: 1, result: { confirmed: [finding('src/r.js', 102), finding('src/r.js', 105)] } }]
+  const { rows } = score({ manifest: { ...manifest, adjudicated }, results })
+  assert.deepEqual(rows[0].adjudicatedTrue, ['src/r.js:102 t src/r.js [high]'])
+  assert.deepEqual(rows[0].adjudicatedFalse, ['src/r.js:105 t src/r.js [high]'], 'the exact ruling wins over the earlier, nearby one')
+  assert.deepEqual(rows[0].unplanned, [])
+  // 107 is near both and inside neither; the first listed ruling applies, as before.
+  const { rows: r2 } = score({ manifest: { ...manifest, adjudicated }, results: [{ pr: 1, result: { confirmed: [finding('src/r.js', 107)] } }] })
+  assert.deepEqual(r2[0].adjudicatedTrue, ['src/r.js:107 t src/r.js [high]'])
+})
+
 test("a ruling on the finding's own site outranks a planted line among its grouped sites", () => {
   const adjudicated = [{ pr: 1, truth: false, title: 'coverage note', sites: [{ file: 'test/y.test.js', lines: [4, 4] }] }]
   const grouped = { ...finding('test/y.test.js', 4), sites: [{ file: 'test/y.test.js', line: 4 }, { file: 'src/c.js', line: 5 }] }

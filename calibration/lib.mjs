@@ -42,7 +42,14 @@ export function score({ manifest, results, heads = {}, window = 5, sets = null }
     // grouped finding may list a planted line among its sites and still be
     // about something else. A ruled finding counts for neither recall nor
     // a planted match.
-    const rulingOn = (f) => (manifest.adjudicated ?? []).find((a) => a.pr === pr && a.sites.some((s) => near({ file: f.file, line: f.line }, s, window)))
+    // A ruling whose lines contain the finding's own line outranks one that only
+    // sits within the window: two findings a few lines apart may deserve
+    // different rulings.
+    const contains = (s, f) => s.file === f.file && f.line >= s.lines[0] && f.line <= s.lines[1]
+    const rulingOn = (f) => {
+      const rulings = (manifest.adjudicated ?? []).filter((a) => a.pr === pr)
+      return rulings.find((a) => a.sites.some((s) => contains(s, f))) ?? rulings.find((a) => a.sites.some((s) => near({ file: f.file, line: f.line }, s, window)))
+    }
     const unruled = confirmed.filter((f) => !rulingOn(f))
     const found = []
     const wronglyRefuted = []
