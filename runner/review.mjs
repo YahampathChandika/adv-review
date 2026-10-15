@@ -19,7 +19,7 @@ import { postComment, renderComment, renderReport, writeOut } from './report.mjs
 import { killAll } from './spawn.mjs'
 import { createWorktrees, defaultExec, safeName } from './worktree.mjs'
 
-export const RUNNER_VERSION = '0.5.3'
+export const RUNNER_VERSION = '0.5.4'
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 const runId = () => `${Date.now().toString(36)}-${process.pid.toString(36)}`

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.4 — 2026-10-15
 
 - `/adv-review:review 140 --agent claude,codex`: two or more agents, comma separated,
   review the pull request once each through the runner and the session reports the
