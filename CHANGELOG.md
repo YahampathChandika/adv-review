@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3 — 2026-10-15
 
 - `/adv-review:review 140 --agent codex` (or `gemini`, `copilot`) in Claude Code runs the
   review with that CLI's agents through the runner and reports as usual. The skill finds
