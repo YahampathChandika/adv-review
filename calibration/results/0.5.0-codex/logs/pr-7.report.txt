@@ -1,0 +1,47 @@
+adv-review: PR #7 at 036830a0 — COMPLETE
+Confirmed (10):
+- [HIGH] src/auth.js:25 (4 sites) Failed sign-ins leak credentials (corrected)
+  Failed-authentication logging exposes the complete Authorization header and raw request URL. Although trailing HTTP whitespace is normalized and does not trigger the failure, other valid malformed header values can contain an active bearer token and are logged verbatim.
+  failure: GET /accounts?access_token=query-secret with Authorization: Bearer tok-bob extra reaches the real server, returns 401, and logs ["sign-in failed","GET","/accounts?access_token=query-secret","with","Bearer tok-bob extra"], exposing the active reusable token tok-bob and the query secret.
+- [HIGH] src/export.js:18 (6 sites) Named exports escape export directory (corrected)
+  Joining an untrusted name without enforcing a basename lets authenticated callers write or overwrite CSV files outside exportDir.
+  failure: An authenticated account owner can submit {"name":"../escaped"}; the server returns 200 while writeFile creates escaped.csv outside exportDir. On Windows, "..\\escaped" has the equivalent effect.
+- [MEDIUM] src/export.js:18 (3 sites) Named exports overwrite across accounts (corrected)
+  Caller-supplied names create a process-wide shared namespace where one account's export silently overwrites another's.
+  failure: Owners of different accounts can choose the same valid export name. The later successful export silently replaces the earlier user's CSV in the shared export directory.
+- [MEDIUM] src/export.js:18 Named exports grow storage unbounded (corrected)
+  Each distinct valid name permanently creates another full CSV without a quota, retention policy, or cleanup path.
+  failure: An authenticated owner can repeatedly export the same account under distinct names, accumulating full persistent CSV copies. On a filesystem shared with the ledger, exhausting its capacity makes subsequent exports and ledger saves return 500.
+- [MEDIUM] src/server.js:103 (2 sites) Accepted names can create no file (corrected)
+  The length-only validation accepts names that are not portable filenames, causing internal errors or writes to Windows devices instead of creating a CSV.
+  failure: An authenticated owner can submit a name containing U+0000 and receive a 500 instead of a validation error; on Windows, reserved device names such as NUL are also accepted. Path separators additionally permit writes outside the configured export directory.
+- [MEDIUM] src/auth.js:25 Warnings expose query-string secrets (corrected)
+  The warning records raw req.url rather than the parsed pathname, so arbitrary query values are exposed and make the promised path field unstable.
+  failure: GET /accounts?access_token=query-secret with Authorization: Bearer guessed-secret returns 401 and logs both /accounts?access_token=query-secret and Bearer guessed-secret rather than only the parsed pathname.
+- [MEDIUM] src/server.js:121 (2 sites) Body errors bypass sign-in warnings (corrected)
+  Protected POST requests are parsed before requireUser runs, so malformed or oversized bodies suppress the failed-sign-in event entirely.
+  failure: POST /accounts with Authorization: Bearer guessed-secret and body "{" returns 400 body must be JSON without recording a failed-sign-in warning.
+- [LOW] src/server.js:103 (3 sites) Unicode characters are miscounted (corrected)
+  Using string.length enforces UTF-16 code units rather than the advertised number of characters.
+  failure: Posting `{ "name": "😀" repeated 40 times }` to an owned account's export route returns 400 even though the supplied name contains only 40 Unicode code points.
+- [LOW] src/server.js:102 Null request bodies crash exports (corrected)
+  The handler destructures the parsed body without ensuring that the JSON root is an object.
+  failure: Posting the valid JSON body `null` to an owned account's export route throws while destructuring `body` and returns 500 instead of a client validation error.
+- [LOW] src/export.js:18 Reported surrogate filename is untrue (corrected)
+  An unpaired UTF-16 surrogate is accepted and returned verbatim even though filesystem encoding replaces it with U+FFFD.
+  failure: Exporting with a name containing lone U+D800 returns `\ud800.csv`, but the created directory entry is `�.csv`, so the reported filename differs from the filename present on disk.
+
+Pre-existing, not this change's doing (2):
+- [HIGH] src/store.js:64 Concurrent saves commit failed transfers (corrected)
+  All concurrent saves share the same process-scoped temporary filename, allowing a committed mutation to receive a failure response.
+  failure: Two concurrent valid transfers can both be persisted while one request receives 500 because the other save already renamed their shared temporary file. Retrying the reported failure applies another transfer.
+- [MEDIUM] src/server.js:106 Exports omit actor attribution (corrected)
+  The authenticated export write creates or overwrites a file without recording the acting user's identity in the audit trail.
+  failure: After an authenticated user creates or replaces an export CSV, the audit collection and persisted ledger contain no export event identifying that user.
+
+The critic names 1 gap(s), unverified:
+- src/export.js removes path.basename from the unnamed-export fallback, so an account ID containing path components can now escape the export directory even when no name is supplied.
+
+Agents: 18 of 20 — 1 scout, 8 finder(s), 1 triage, 1 same-site, 6 skeptic(s), 1 critic.
+Angles: security, data-integrity, cross-platform filename semantics, operational logging contract, correctness, tests-that-dont-test, boundary-contract, authz-and-attribution; dropped silent-drops, migrations-and-rollout.
+Runner: codex (gpt-5.6-sol, codex-cli 0.153.4), 18 call(s), 15 min 4707077 tokens.

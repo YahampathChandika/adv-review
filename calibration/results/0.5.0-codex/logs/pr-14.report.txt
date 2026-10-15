@@ -1,0 +1,41 @@
+adv-review: PR #14 at 0bf23917 — COMPLETE
+Confirmed (8):
+- [HIGH] src/interest.js:16 (6 sites) Local and UTC days diverge (corrected)
+  The duplicate check uses the host-local calendar day while the stored marker uses the UTC day, so there is no consistent bank timezone.
+  failure: With TZ=Asia/Colombo and an open account holding 100000 cents at 500 bps, calls at 2026-03-02T18:45:00Z and 2026-03-02T19:45:00Z both regard the local day as 2026-03-03 but persist lastAccruedOn as 2026-03-02. Both calls credit 13 cents, leaving 100026 cents instead of 100013.
+- [HIGH] src/migrations/004-last-accrued.js:6 (5 sites) Cutover recredits already-paid accounts (corrected)
+  Migration 004 marks every existing account as uncredited even when the previous scheduler already paid that day's interest.
+  failure: A legacy account already credited on the rollout day is migrated with lastAccruedOn:null and receives a second daily credit when the new server timer first runs that day.
+- [HIGH] src/server.js:164 Hourly save races request saves (corrected)
+  The hourly callback launches an unserialized save while request handlers may save concurrently, and both writes use the same process-specific temporary filename.
+  failure: When the hourly save and a deposit save overlap, the request's save can reject with ENOENT after the deposit mutation; the route returns 500, and retrying against the still-mutated process credits and audits the deposit again.
+- [HIGH] src/server.js:162 Restart loops prevent all accrual (corrected)
+  Interest is not run at startup, so the first attempt requires a full uninterrupted hour of server uptime.
+  failure: With no external scheduler and restarts less than one hour apart, no accrual callback runs, so eligible accounts can remain uncredited indefinitely.
+- [MEDIUM] src/interest.js:24 Clock sampled across midnight (corrected)
+  Sampling clock separately for the timestamp and day allows one accrual to span midnight and compare against a different day than it records.
+  failure: An invocation whose two clock reads straddle UTC midnight can compare against March 3 but record March 2, allowing both that invocation and the next March 3 invocation to credit interest.
+- [MEDIUM] src/store.js:12 Rollback writes erase accrual marker (corrected)
+  The new marker is not compatible with the previous release's projected account schema, so any old-code account update silently deletes it.
+  failure: After release 4 credits an account, a release-3 account update projects away lastAccruedOn and saves version 4. A release-4 restart skips migration 004 and credits that account again on the same calendar day.
+- [MEDIUM] src/server.js:164 Failed accrual remains only in memory (corrected)
+  A failed background save is only logged after balance, marker, and audit mutations remain active in memory, with no rollback or immediate durable retry.
+  failure: If the hourly save rejects and the process exits before another successful save, clients can observe the credited in-memory balance even though disk retains the old balance and marker; restarting on a later day permanently omits the failed day's interest.
+- [MEDIUM] src/server.js:163 Accrual exceptions crash the server (corrected)
+  The interval catches only the asynchronous save rejection, so any synchronous exception from accrueInterest escapes the timer callback and terminates the Node process.
+  failure: After one hour, a server using a version-4 ledger whose audit field is null and which contains an eligible interest-bearing account throws synchronously from Store.insert('audit', ...). The exception escapes the interval callback, terminates the process, and leaves the credited balance and lastAccruedOn change unpersisted.
+
+Pre-existing, not this change's doing (2):
+- [HIGH] README.md:10 (2 sites) Legacy scheduler remains a concurrent writer (corrected)
+  The PR leaves newly obsolete external-scheduler guidance in place, but the external job's ability to overwrite concurrent acknowledged API changes already existed before this diff.
+  failure: If the external job opens the ledger before an API deposit is saved and writes its stale snapshot afterward, the acknowledged deposit is removed from the persisted ledger.
+- [MEDIUM] src/interest.js:30 Missed days collapse into one (corrected)
+  The job only distinguishes today from another date and always applies one daily amount, so it cannot recover calendar days missed during downtime or timer delay.
+  failure: After a Friday marker and weekend downtime, Monday's invocation credits only one day's 13 cents instead of the three daily credits due through Monday, then advances the marker to Monday so the two omitted days cannot be recovered.
+
+The critic names 1 gap(s), unverified:
+- src/server.js:162-165 unconditionally calls store.save() every hour, even when accrueInterest returns zero changes. Because Store.save serializes and rewrites the entire ledger, this creates up to 23 unnecessary full-file rewrites after the day's accrual and performs that work in the HTTP-serving process.
+
+Agents: 19 of 20 — 1 scout, 9 finder(s), 1 triage, 1 same-site, 6 skeptic(s), 1 critic.
+Angles: calendar-day semantics, migrations-and-rollout, data-integrity, scheduler lifecycle, correctness, tests-that-dont-test, boundary-contract, silent-drops, authz-and-attribution; dropped security.
+Runner: codex (gpt-5.6-sol, codex-cli 0.153.4), 19 call(s), 15 min 5434418 tokens.

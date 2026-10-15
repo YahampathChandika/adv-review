@@ -185,7 +185,7 @@ cut the agents off from the network.
 | Posting | the session asks; `--post` | `--post` via `gh` | same | same |
 | Resume after a lost agent | yes | no: rerun | no | no |
 | Cost visibility | the session's usage | dollars per agent | tokens | tokens, partial |
-| Calibration | 0.4.0: 17 of 18 on both sets | sample pending | sample pending | not run: no Gemini plan |
+| Calibration | 0.4.0: 17 of 18 on both sets; 4 of 4 on the sample, 7 of 7 true | sample: 4 of 4 planted defects, 6 of 7 findings true, $16 on Sonnet | sample: 4 of 4 planted defects, 21 of 22 findings true | not run: no Gemini plan |
 | Status | supported | supported | experimental | experimental |
 
 Runner options beyond the skill's: `--jobs N` agents at once, `--timeout MIN` per agent
@@ -363,8 +363,31 @@ of the second set were confirmed.
 The 0.2.0 false positives were all notes on weak tests over correct code; 0.3.0 made a
 blind test evidence on the defect it hides rather than a finding of its own.
 
-Through the runner, a four-PR sample (#4, #7, #14 and #11) is recorded per agent under
-`calibration/results/0.5.0-<agent>/`; the capability matrix above carries the result.
+### Through the runner
+
+The same four PRs, #4, #7 and #14 with four planted defects between them and the
+clean #11, were reviewed through the runner with Claude agents on Sonnet and with Codex
+on its CLI's default model, each at its default settings, next to the 0.4.0 plugin pass
+on those PRs. Four PRs are a sample, not a score: they show that the review works with
+that agent and roughly what it costs. The per-PR tables and every ruling are in
+[`calibration/`](calibration/README.md#other-agents).
+
+| Four PRs: #4, #7, #14, #11 | Claude Code plugin, 0.4.0 | Claude through the runner | OpenAI Codex through the runner |
+| :- | :- | :- | :- |
+| Agents' model | Sonnet | Sonnet | `gpt-5.6-sol`, the CLI's default |
+| Planted defects confirmed | 4 of 4 | 4 of 4 | 4 of 4 |
+| Confirmed findings true | 7 of 7 | 6 of 7 | 21 of 22 |
+| Findings on the clean PR | none | none | one, pre-existing |
+| Agents per PR | 4 to 20 | 6 to 20 | 6 to 19 |
+| Time per PR | 17 to 34 minutes | 7 to 30 minutes | 5 to 15 minutes |
+| Cost of the four | $23, agents and the Opus session | $16, agents only | 15.9M input tokens, 90% cached; 0.33M output |
+
+Codex reported more beside the planted defects, eleven true findings about the PRs and
+one false; Claude through the runner reported one of each. One finding the 0.4.0 pass
+had confirmed on #14 was found and then refuted this time by Claude's skeptics: it is
+not planted, so it counts for neither recall nor precision, but it is the variance a
+sample this size carries. Gemini was not run: no Gemini plan was available, and its
+backend is tested against a stand-in CLI only.
 
 ## Development
 

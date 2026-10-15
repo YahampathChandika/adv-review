@@ -1,0 +1,15 @@
+adv-review: PR #11 at be23305b — COMPLETE
+Confirmed: none.
+
+Pre-existing, not this change's doing (1):
+- [MEDIUM] src/export.js:7 Bare carriage returns split CSV rows (corrected)
+  The CSV encoder does not quote fields containing a lone carriage return, so an allowed memo can corrupt the exported record structure.
+  failure: A valid transfer whose memo is "first\rsecond" exports an unquoted carriage return. A standard CSV reader splits that transfer into a six-column row ending at "first" and a two-column row beginning with "second", corrupting the record structure.
+
+The critic names 2 gap(s), unverified:
+- src/export.js:19 leaves an empty account's export with only the `currency` header and no currency value, so an empty statement is not readable on its own as promised.
+- src/export.js:19 exports a blank currency for accounts created without that field after migration 002 has already run.
+
+Agents: 6 of 20 — 1 scout, 3 finder(s), 0 triage, 0 same-site, 1 skeptic(s), 1 critic.
+Angles: correctness, boundary-contract, tests-that-dont-test; dropped silent-drops, authz-and-attribution, security, data-integrity, migrations-and-rollout.
+Runner: codex (gpt-5.6-sol, codex-cli 0.153.4), 6 call(s), 5 min 1592229 tokens.

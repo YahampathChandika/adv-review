@@ -1,0 +1,513 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "88d0e534ac12020b2a6f616da97efb8b360d5676",
+  "target": {
+    "prs": [
+      4
+    ]
+  },
+  "angles": [
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "migrations-and-rollout",
+      "source": "fixed"
+    },
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    },
+    {
+      "title": "authz-and-attribution",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "security",
+      "why": "The new path parameter reaches only an exact account-ID lookup, the body value reaches integer validation and arithmetic, and responses use the existing explicit serializer. I found no new SQL, HTML, filesystem-path, URL, redirect, CORS, secret, logging, or third-party-data sink; authorization is retained separately under authz-and-attribution."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "This PR adds `overdraftCents` to account creation, migration and API serialization, an administrator endpoint for setting it, and transfer coverage logic that adds it to available balance. It also updates documentation and tests for response shape, endpoint permissions and validation, migration version, and the new coverage helper.",
+  "confirmed": [
+    {
+      "title": "Schema silently drops overdraft limits",
+      "file": "src/store.js",
+      "line": 12,
+      "category": "data-persistence",
+      "severity": "high",
+      "rootCause": "The accounts schema omits overdraftCents, causing schema-filtered account inserts and updates to discard the field.",
+      "summary": "The accounts schema omits `overdraftCents`, so both account creation and limit updates silently discard the field.",
+      "failure": "For a newly opened zero-balance account, POST /accounts/:id/overdraft with an administrator token and {\"overdraftCents\":500} returns 200 but neither stores nor returns 500; GET reports 0, the saved JSON lacks overdraftCents, and a subsequent 100-cent transfer returns 409 \"insufficient funds\".",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Schema silently drops overdraft limits"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Schema drops configured overdraft limits"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Schema drops every overdraft limit"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Account writes erase overdraft limits"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Schema silently discards overdraft limits"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Overdraft values are always discarded"
+        }
+      ],
+      "foundBy": [
+        "silent-drops",
+        "tests-that-dont-test",
+        "boundary-contract",
+        "migrations-and-rollout",
+        "correctness",
+        "data-integrity"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read the route, setOverdraft, Store.insert/update/pick, migration, serializer, transfer guard, and tests. SCHEMA.accounts excludes overdraftCents. Both account creation and setOverdraft therefore discard it because insert/update pass rows through pick. publicAccount then masks the missing value as 0. A focused end-to-end HTTP test reproduced exactly: setter status 200, setter response overdraftCents 0, GET overdraftCents 0, persisted account missing the key, and a 100-cent transfer from the zero-balance account returning 409 insufficient funds. The existing route test passes because it asserts only the setter status. Migration 003 directly adds 0 to existing rows, but subsequent schema-filtered account updates remove that key.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Failed writes remain applied",
+      "file": "src/server.js",
+      "line": 102,
+      "category": "partial-failure",
+      "severity": "high",
+      "rootCause": "Request handlers mutate the shared in-memory store before persistence succeeds and do not roll back mutations when save fails.",
+      "summary": "Handlers mutate the shared in-memory store before awaiting save and never roll back when persistence fails.",
+      "failure": "For an authenticated admin depositing 100 cents into an open account at balance 0, if Store.save() throws after deposit() mutates memory, POST /deposits returns 500 but the shared in-memory balance remains 100 and is returned by GET. Retrying deposits another 100 and successfully persists 200 rather than the intended 100.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 102,
+          "title": "Failed writes remain applied"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": true,
+      "verdict": "CONFIRMED",
+      "reasoning": "At src/server.js:101-102, deposit() completes before store.save() is awaited. deposit() immediately replaces the shared account row and appends an audit row; Store.save() only serializes the already-mutated data, and the server's error handler performs no rollback. An HTTP reproduction with save forced to fail once returned 500, then GET reported balanceCents 100 while ledger.json still held 0; retrying the same deposit returned 201 and persisted 200. The parent commit has the same mutation-before-save sequence, confirming this defect is pre-existing as claimed. The full test suite passed but contains no save-failure rollback coverage.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Concurrent saves share temporary file",
+      "file": "src/store.js",
+      "line": 64,
+      "category": "concurrency",
+      "severity": "high",
+      "rootCause": "Concurrent saves in one process use the same PID-based temporary filename, allowing their write-and-rename sequences to race.",
+      "summary": "Every in-process save uses the same PID-based temporary pathname, so overlapping requests race to rename one file and one valid write fails ambiguously.",
+      "failure": "Two overlapping deposits can both mutate and persist the shared in-memory state, but one request receives 500 when its rename finds that the shared temporary path has already been renamed. Retrying that apparently failed deposit applies it a second time.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 64,
+          "title": "Concurrent saves share temporary file"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": true,
+      "verdict": "CONFIRMED",
+      "reasoning": "`Store.save` always uses `<ledger>.<process.pid>.tmp`, and HTTP request handlers can call it concurrently. A focused run of 50 overlapping saves produced 1 fulfillment and 49 `ENOENT` rename failures. Two concurrent deposits of 100 and 200 returned 201 and 500, while memory, disk, and a reopened store all showed 300; retrying the failed 200 deposit succeeded and raised the balance to 500. `src/store.js` is unchanged from the parent commit.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    },
+    {
+      "title": "Whole-file saves lose concurrent updates",
+      "file": "src/store.js",
+      "line": 65,
+      "category": "concurrency",
+      "severity": "high",
+      "rootCause": "Separate Store instances overwrite the entire data file from potentially stale snapshots without locking or conflict detection.",
+      "summary": "Independent Store instances serialize stale full-file snapshots without locking or conflict detection, allowing the last save to erase another process's committed account mutation.",
+      "failure": "If one store saves an update to account A and then an independently opened stale store saves an update to account B, the latter whole-file write restores A's old value and loses the first committed update.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 65,
+          "title": "Whole-file saves lose concurrent updates"
+        }
+      ],
+      "foundBy": [
+        "data-integrity"
+      ],
+      "preexisting": true,
+      "verdict": "CONFIRMED",
+      "reasoning": "Each `Store.open` loads an independent full-file snapshot, and `save` performs no reload, lock, version check, or merge. In a focused run, two stores opened balances A=0/B=0; the first saved A=100, then the stale second saved B=200, and reopening showed A=0/B=200. `docs/deploy.md` explicitly allows two copies against one file during rollout. The implementation and deployment text both predate this diff.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    },
+    {
+      "title": "Null overdraft body returns 500",
+      "file": "src/server.js",
+      "line": 92,
+      "category": "input-validation",
+      "severity": "medium",
+      "rootCause": "The overdraft route dereferences body.overdraftCents without verifying that the parsed JSON body is a non-null object.",
+      "summary": "The new route dereferences `body.overdraftCents` without ensuring the parsed JSON body is an object.",
+      "failure": "An authenticated administrator posting literal JSON `null` to `/accounts/:id/overdraft` receives a 500 internal-error response instead of a 400 validation response.",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "line": 92,
+          "title": "Null overdraft body returns 500"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "`readJson` returns parsed `null` unchanged, role authentication only establishes that the caller is an admin, and the new handler immediately evaluates `body.overdraftCents`. A focused authenticated request containing literal JSON `null` raised `TypeError: Cannot read properties of null` at `src/server.js:92` and returned 500 `{ \"error\": \"internal error\" }`. The route was introduced by this diff.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "README.md's role matrix still says administrators only add deposit authority to member capabilities, omitting their new authority to set any account's overdraft limit and contradicting the endpoint table.",
+      "why": "The completed angles examine runtime contracts, authorization, persistence, migrations, integrity, and tests; none checks consistency of user-facing capability documentation."
+    }
+  ],
+  "counts": {
+    "raw": 10,
+    "rootCauses": 5,
+    "merged": 0,
+    "confirmed": 5,
+    "plausible": 0,
+    "corrected": 5,
+    "downgraded": 0,
+    "preexisting": 3,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 18,
+    "scout": 1,
+    "finders": 7,
+    "triage": 1,
+    "sameSite": 1,
+    "skeptics": 7,
+    "critic": 1,
+    "retries": 0
+  },
+  "runner": {
+    "version": "0.5.0",
+    "agent": "codex",
+    "model": "gpt-5.6-sol",
+    "cliVersion": "codex-cli 0.153.4",
+    "jobs": 3,
+    "startedAt": "2026-10-15T08:20:19.087Z",
+    "elapsedMs": 687900,
+    "cost": {
+      "usd": null,
+      "inputTokens": 4462161,
+      "cachedInputTokens": 3968384,
+      "outputTokens": 72065
+    },
+    "calls": [
+      {
+        "label": "scout",
+        "attempt": 1,
+        "durationMs": 101157,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 312974,
+          "cachedInputTokens": 279936,
+          "outputTokens": 6348
+        }
+      },
+      {
+        "label": "find:silent-drops",
+        "attempt": 1,
+        "durationMs": 61604,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 196225,
+          "cachedInputTokens": 173184,
+          "outputTokens": 3233
+        }
+      },
+      {
+        "label": "find:tests-that-dont-test",
+        "attempt": 1,
+        "durationMs": 76088,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 311227,
+          "cachedInputTokens": 283392,
+          "outputTokens": 4281
+        }
+      },
+      {
+        "label": "find:boundary-contract",
+        "attempt": 1,
+        "durationMs": 77630,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 260449,
+          "cachedInputTokens": 230528,
+          "outputTokens": 4695
+        }
+      },
+      {
+        "label": "find:migrations-and-rollout",
+        "attempt": 1,
+        "durationMs": 71853,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 307138,
+          "cachedInputTokens": 276480,
+          "outputTokens": 4076
+        }
+      },
+      {
+        "label": "find:correctness",
+        "attempt": 1,
+        "durationMs": 64347,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 281564,
+          "cachedInputTokens": 233216,
+          "outputTokens": 3557
+        }
+      },
+      {
+        "label": "find:authz-and-attribution",
+        "attempt": 1,
+        "durationMs": 75432,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 230939,
+          "cachedInputTokens": 207488,
+          "outputTokens": 3486
+        }
+      },
+      {
+        "label": "find:data-integrity",
+        "attempt": 1,
+        "durationMs": 169105,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 433493,
+          "cachedInputTokens": 396672,
+          "outputTokens": 10594
+        }
+      },
+      {
+        "label": "triage",
+        "attempt": 1,
+        "durationMs": 32328,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 140563,
+          "cachedInputTokens": 111616,
+          "outputTokens": 1630
+        }
+      },
+      {
+        "label": "same-site",
+        "attempt": 1,
+        "durationMs": 27092,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 116315,
+          "cachedInputTokens": 98048,
+          "outputTokens": 1058
+        }
+      },
+      {
+        "label": "refute:p1.2",
+        "attempt": 1,
+        "durationMs": 46233,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 202113,
+          "cachedInputTokens": 180224,
+          "outputTokens": 2630
+        }
+      },
+      {
+        "label": "refute:p1.3",
+        "attempt": 1,
+        "durationMs": 53995,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 236757,
+          "cachedInputTokens": 212864,
+          "outputTokens": 3189
+        }
+      },
+      {
+        "label": "refute:p1.1",
+        "attempt": 1,
+        "durationMs": 57834,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 279192,
+          "cachedInputTokens": 253440,
+          "outputTokens": 3488
+        }
+      },
+      {
+        "label": "refute:p2.1",
+        "attempt": 1,
+        "durationMs": 48687,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 216450,
+          "cachedInputTokens": 196352,
+          "outputTokens": 2733
+        }
+      },
+      {
+        "label": "refute:p2.2",
+        "attempt": 1,
+        "durationMs": 41586,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 162340,
+          "cachedInputTokens": 142720,
+          "outputTokens": 2488
+        }
+      },
+      {
+        "label": "refute:p2.3",
+        "attempt": 1,
+        "durationMs": 49447,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 199102,
+          "cachedInputTokens": 177024,
+          "outputTokens": 2807
+        }
+      },
+      {
+        "label": "refute:1",
+        "attempt": 1,
+        "durationMs": 79441,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 254155,
+          "cachedInputTokens": 226176,
+          "outputTokens": 5117
+        }
+      },
+      {
+        "label": "critic",
+        "attempt": 1,
+        "durationMs": 105619,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 321165,
+          "cachedInputTokens": 289024,
+          "outputTokens": 6655
+        }
+      }
+    ],
+    "intent": "excerpt"
+  }
+}

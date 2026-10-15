@@ -1,0 +1,529 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "036830a04e80ca63d934f178397b7d640e59d0cc",
+  "target": {
+    "prs": [
+      7
+    ]
+  },
+  "angles": [
+    {
+      "title": "security",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "shared-export-namespace collisions",
+      "source": "scout"
+    },
+    {
+      "title": "prompt-injection via PR data",
+      "source": "scout"
+    },
+    {
+      "title": "data-integrity",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "authz-and-attribution",
+      "why": "The route's auth gate is unchanged: requireUser still runs first and getOwnAccount(store, user, params[0]) still enforces ownership before the new `name` is even read. No new entry point, no change to who may call it or how identity is derived."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "No schema or migration file is touched, no stored field is added/removed/renamed, and old/new code never need to read each other's data across a deploy boundary here."
+    },
+    {
+      "title": "silent-drops",
+      "why": "Nothing new is written to the store and read back under a different name; `name`/`file` only flow into a filesystem write and the same request's JSON response, not into any persisted record or schema."
+    },
+    {
+      "title": "correctness",
+      "why": "The added guard (`name !== undefined && (typeof name !== 'string' || !name.length || name.length > 64)`) is simple and I traced it by hand: it correctly allows 1-64 chars and rejects 0 or 65+, `name ?? account.id` falls back correctly, and no promise/await/ordering changed. The real defect here is a missing check, not an off-by-one or inverted condition, so it is better covered under security/boundary-contract than general correctness."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR lets callers of POST /accounts/:id/export name the output file via `{ name }` (validated only for type/length 1-64), and adds a console.warn logging the method, URL and raw Authorization header on every failed sign-in. Both changes remove or contradict safety invariants the surrounding code used to guarantee: export.js's removed doc comment said the filename \"is the account's id and nothing else, so a caller cannot name a path outside dir\", and auth.js's own header comment still says \"the token... is never logged.\"",
+  "confirmed": [
+    {
+      "title": "Path traversal in export name escapes exports dir",
+      "file": "src/export.js",
+      "line": 18,
+      "category": "security",
+      "severity": "critical",
+      "rootCause": "exportTransfers joins the caller-supplied `name` into the file path without sanitization (the prior path.basename(account.id) guard was removed), letting `../` segments in `name` write the CSV outside exportDir — and the new test only checks length, never covering `/` or `..`, so the regression passes the suite.",
+      "summary": "The new `name` parameter is joined into a file path with no character restriction, letting an authenticated account owner write a CSV file anywhere the server process can write via `../` segments.",
+      "failure": "POST /accounts/:id/export with body { name: '../../../x' } (or similarly crafted traversal strings) passes the only check in src/server.js (typeof string, length 1-64) and is joined directly into the file path in src/export.js:18, writing the CSV outside the configured exportDir — verified by running the real server and finding the written file outside the exports directory tree entirely.",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Path traversal in export name escapes exports dir"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Export name param allows path traversal"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Unsanitized export name allows path traversal outside exportDir"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Export name allows path traversal, arbitrary overwrite"
+        },
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Export name allows path traversal to arbitrary writable files"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 74,
+          "title": "New export test omits the traversal case"
+        }
+      ],
+      "foundBy": [
+        "boundary-contract",
+        "tests-that-dont-test",
+        "shared-export-namespace collisions",
+        "data-integrity",
+        "security"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/export.js and src/server.js at the PR head. The prior guard `path.basename(account.id)` was removed; the new code builds `file = path.join(dir, `${name ?? account.id}.csv`)` directly from the caller-supplied `name`. server.js's only validation (lines 102-105) checks `typeof name === 'string'` and length 1-64 — it never restricts characters like `/` or `..`. I reproduced the exploit end-to-end by starting a real server (via createServer, same code path test/helpers.js uses) with an isolated exportDir, authenticating as a real user, opening an account, and POSTing /accounts/:id/export with body { name: '../../../adv-review-poc-escape' }. The server returned 200 with { exported: 0, file: 'adv-review-poc-escape.csv' } (the response's `file` field is computed via path.basename so it hides the traversal), and a real CSV file was written at /var/folders/.../T/adv-review-poc-escape.csv — one directory above the entire temp-dir tree containing the configured exportDir (.../T/ledger-exploit-OApIPe/nested/exports). I verified the file's contents (CSV header) and confirmed it did not land inside exportDir. I also confirmed via grep that no other file (server.js, export.js) applies any character/path sanitization to `name`, and that test/server.test.js's new assertions (lines 74-77) only cover a benign name and an over-length name, never `/` or `..`, so the regression is unguarded by the test suite. This fully matches the claim: an authenticated account owner can write a CSV file anywhere the server process has write permission via `../` segments in `name`, and it was introduced by this diff (confirmed by the diff itself removing the basename guard).",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    },
+    {
+      "title": "Caller-chosen export name overwrites any other user's file",
+      "file": "src/export.js",
+      "line": 18,
+      "category": "correctness",
+      "severity": "high",
+      "rootCause": "exportDir is one directory shared by every account with no per-account prefix or ownership check, so any signed-in user can overwrite another user's export just by reusing its `name`, independent of any path-traversal characters.",
+      "summary": "exportDir (src/server.js:113-114) is one directory shared by every account on the service, and the new `name` parameter is written straight into that shared namespace with no per-account prefix and no check that the name is unused or owned by the caller, so any signed-in user can silently overwrite another user's previously-named export simply by reusing its name on their own (unrelated) account.",
+      "failure": "Verified by running the handler directly: Bob opens two accounts, transfers 1234 cents between them with memo 'rent', and exports it as `{ name: 'statement' }`, producing exports/statement.csv containing that transfer row. A second, unrelated user Cy (tok-cy) then opens his own account and calls POST /accounts/<hisOwnAccountId>/export with the same `{ name: 'statement' }` — an entirely legitimate request against an account he owns. The server returns 200 and exports/statement.csv is silently overwritten with Cy's (empty) data; Bob's exported transfer row is gone with no error, warning, or conflict response to either party.",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "line": 18,
+          "title": "Caller-chosen export name overwrites any other user's file"
+        }
+      ],
+      "foundBy": [
+        "shared-export-namespace collisions"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/export.js and src/server.js: exportDir is a single shared directory (test/helpers.js passes the same path.join(dir, 'exports') for every user), and the new `name` body field is written straight into `path.join(dir, `${name ?? account.id}.csv`)` with no per-account prefix, no uniqueness check, and no ownership check -- getOwnAccount only validates that the caller owns the *account being exported*, not the `name` string used for the output file. Reproduced the exact scenario in the worktree: Bob opens two accounts, transfers 1234 cents with memo 'rent', exports as {name:'statement'} (200, file written with the transfer row). A second unrelated user Cy (tok-cy, a fixture already present in test/helpers.js) opens his own account and POSTs /accounts/<hisAccountId>/export with the same {name:'statement'}. Server returns 200 {exported:0, file:'statement.csv'}, and exports/statement.csv is silently overwritten with Cy's empty data -- Bob's transfer row is gone, no error/warning/conflict to either party. Confirmed this is newly introduced by the diff: before, the filename was unconditionally path.basename(account.id), which is unique per account and could not collide across users; the diff is what introduces the caller-controlled shared-namespace name.",
+      "verifiedBy": [
+        "refute:p2.1",
+        "refute:p2.2",
+        "refute:p2.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    },
+    {
+      "title": "Failed sign-in log leaks real bearer tokens",
+      "file": "src/auth.js",
+      "line": 25,
+      "category": "security",
+      "severity": "high",
+      "rootCause": "requireUser's new failed-sign-in log statement prints ctx.req.headers.authorization verbatim on every auth failure, contradicting auth.js's documented invariant that the bearer token is never logged.",
+      "summary": "requireUser logs the raw Authorization header verbatim on every authentication failure, not just on attacker-guessed tokens, directly contradicting the adjacent, unmodified doc comment that 'the token is the only credential; it is never logged.'",
+      "failure": "A request with any non-matching Authorization header (expired/rotated token, typo, stale cached token, or outright guess) causes console.warn to write the full 'Bearer <token>' value to stdout/logs in plaintext, violating the documented never-log invariant for any failed sign-in, not just attacker guesses.",
+      "sites": [
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed sign-in log leaks real bearer tokens"
+        },
+        {
+          "file": "src/auth.js",
+          "line": 25,
+          "title": "Failed sign-in logs the raw Authorization header"
+        }
+      ],
+      "foundBy": [
+        "prompt-injection via PR data",
+        "security"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/auth.js:1-30. authenticate() returns null whenever the header is missing, malformed, or the token doesn't match any user in the store (line 6-10) — this covers far more cases than just an attacker guessing a token: an expired/rotated real token, a stale cached token from a legitimate client, a typo, etc. requireUser (lines 21-30, added by this diff replacing the single-line `if (!user) throw ...`) unconditionally calls `console.warn('sign-in failed', ctx.req.method, ctx.req.url, 'with', ctx.req.headers.authorization ?? '(no token)')` before throwing in every one of those null cases — there is no branch distinguishing 'looks like an attacker guess' from 'legitimate client, transient failure'. ctx.req.headers.authorization is the raw, unredacted header value the client sent (e.g. 'Bearer realtoken123'), confirmed by authenticate() reading the same field directly off req.headers. Grepped src/ for other console.* calls and test/ for any coverage of this log line or redaction logic — found none; nothing sanitizes or gates the output. This directly contradicts the adjacent, unmodified doc comment at auth.js:1-5 ('The token is the only credential; it is never logged.'). The diff shows this exact line was newly added, so it is introduced by this diff, not pre-existing. I could not construct any guard, caller, or test that prevents or narrows this behavior, so the claim stands as stated.",
+      "verifiedBy": [
+        "refute:p3.1",
+        "refute:p3.2",
+        "refute:p3.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it",
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The new `name` guard (src/server.js:101) only checks type and length (1-64 chars), not whether the string is a valid path segment. A name like `abc\u0000def` is a legal 7-char string, passes validation, reaches `exportTransfers`, and makes `fs.writeFile` throw `ERR_INVALID_ARG_VALUE` ('path ... without null bytes') synchronously — an error that isn't an `HttpError`, so it falls through to server.js's catch-all and returns a 500 instead of the promised 400. I reproduced this directly: a 7-character name containing `\\0` throws exactly that error from `writeFile`. The scout's correctness pass only hand-traced the length arithmetic (0 vs 65+), not what characters are safe to hand to the filesystem, so a case that turns client input-validation into an unhandled crash wasn't exercised.",
+      "why": "Security and boundary-contract both focused on *where* the write lands (traversal, overwrite) — a question about successful-but-wrong writes. None of them asked whether a value that passes the length check can still make the underlying `writeFile`/`mkdir` call throw synchronously; that's an exception-handling question about the server's fallback path, not a path-resolution question, so it falls outside both angles' framing."
+    },
+    {
+      "what": "Before this PR, an account's export was always written to the same `<accountId>.csv`, so repeated calls overwrote one file — exports could never accumulate. With caller-chosen names, a single signed-in user can now call export on one account repeatedly with a new `name` each time and accumulate unlimited CSV files under `exports/`, each holding that account's full transfer history, without opening new accounts or any other action that incurs the ledger's existing per-account bookkeeping cost. This is a structural bound the old code enforced by construction (one filename per account) that this diff removes, as opposed to the already-documented 'no rate limiting' limitation, which only covers request throughput, not per-resource file accumulation.",
+      "why": "The 'shared-export-namespace collisions' and security angles examined *collisions between different accounts' files* (overwrite, traversal) — a multi-tenant framing. Accumulation under one account acting alone isn't a collision and isn't an auth boundary, so it falls outside what either angle was looking for; it's a consequence of removing a structural invariant, not a bug in the new validation logic itself."
+    }
+  ],
+  "counts": {
+    "raw": 9,
+    "rootCauses": 3,
+    "merged": 0,
+    "confirmed": 3,
+    "plausible": 0,
+    "corrected": 2,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 19,
+    "scout": 1,
+    "finders": 6,
+    "triage": 1,
+    "sameSite": 1,
+    "skeptics": 9,
+    "critic": 1,
+    "retries": 0
+  },
+  "runner": {
+    "version": "0.5.0",
+    "agent": "claude",
+    "model": "claude-sonnet-5",
+    "cliVersion": "2.1.267 (Claude Code)",
+    "jobs": 6,
+    "startedAt": "2026-10-15T08:47:05.826Z",
+    "elapsedMs": 881776,
+    "cost": {
+      "usd": 3.9358554,
+      "inputTokens": 46372,
+      "cachedInputTokens": 5614797,
+      "outputTokens": 132341
+    },
+    "calls": [
+      {
+        "label": "scout",
+        "attempt": 1,
+        "durationMs": 214571,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.34860660000000004,
+          "turns": 18,
+          "durationMs": 213247,
+          "inputTokens": 3066,
+          "cachedInputTokens": 351188,
+          "outputTokens": 15734
+        }
+      },
+      {
+        "label": "find:boundary-contract",
+        "attempt": 1,
+        "durationMs": 72901,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.1686976,
+          "turns": 13,
+          "durationMs": 70938,
+          "inputTokens": 2223,
+          "cachedInputTokens": 245968,
+          "outputTokens": 5015
+        }
+      },
+      {
+        "label": "find:tests-that-dont-test",
+        "attempt": 1,
+        "durationMs": 93142,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.20443,
+          "turns": 15,
+          "durationMs": 91148,
+          "inputTokens": 2224,
+          "cachedInputTokens": 313450,
+          "outputTokens": 6757
+        }
+      },
+      {
+        "label": "find:prompt-injection via PR data",
+        "attempt": 1,
+        "durationMs": 116882,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.18568779999999996,
+          "turns": 14,
+          "durationMs": 114965,
+          "inputTokens": 2101,
+          "cachedInputTokens": 256524,
+          "outputTokens": 7404
+        }
+      },
+      {
+        "label": "find:shared-export-namespace collisions",
+        "attempt": 1,
+        "durationMs": 122198,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.273603,
+          "turns": 18,
+          "durationMs": 120141,
+          "inputTokens": 2122,
+          "cachedInputTokens": 435375,
+          "outputTokens": 9067
+        }
+      },
+      {
+        "label": "find:data-integrity",
+        "attempt": 1,
+        "durationMs": 129392,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.241576,
+          "turns": 18,
+          "durationMs": 127389,
+          "inputTokens": 2078,
+          "cachedInputTokens": 377065,
+          "outputTokens": 8219
+        }
+      },
+      {
+        "label": "find:security",
+        "attempt": 1,
+        "durationMs": 150204,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.2921808000000001,
+          "turns": 17,
+          "durationMs": 148107,
+          "inputTokens": 2264,
+          "cachedInputTokens": 350994,
+          "outputTokens": 11632
+        }
+      },
+      {
+        "label": "triage",
+        "attempt": 1,
+        "durationMs": 89234,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.19199880000000003,
+          "turns": 12,
+          "durationMs": 87757,
+          "inputTokens": 2694,
+          "cachedInputTokens": 216609,
+          "outputTokens": 7181
+        }
+      },
+      {
+        "label": "same-site",
+        "attempt": 1,
+        "durationMs": 39247,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.17170300000000002,
+          "turns": 8,
+          "durationMs": 37627,
+          "inputTokens": 2588,
+          "cachedInputTokens": 98805,
+          "outputTokens": 3294
+        }
+      },
+      {
+        "label": "refute:p2.1",
+        "attempt": 1,
+        "durationMs": 65920,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.1527274,
+          "turns": 12,
+          "durationMs": 63724,
+          "inputTokens": 2479,
+          "cachedInputTokens": 284267,
+          "outputTokens": 3554
+        }
+      },
+      {
+        "label": "refute:p1.2",
+        "attempt": 1,
+        "durationMs": 66065,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.1512332,
+          "turns": 11,
+          "durationMs": 64060,
+          "inputTokens": 2569,
+          "cachedInputTokens": 228156,
+          "outputTokens": 4201
+        }
+      },
+      {
+        "label": "refute:p2.2",
+        "attempt": 1,
+        "durationMs": 76486,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.17001519999999998,
+          "turns": 12,
+          "durationMs": 74396,
+          "inputTokens": 2489,
+          "cachedInputTokens": 289646,
+          "outputTokens": 4706
+        }
+      },
+      {
+        "label": "refute:p1.3",
+        "attempt": 1,
+        "durationMs": 87718,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.1748936,
+          "turns": 12,
+          "durationMs": 85690,
+          "inputTokens": 2583,
+          "cachedInputTokens": 286683,
+          "outputTokens": 4921
+        }
+      },
+      {
+        "label": "refute:p2.3",
+        "attempt": 1,
+        "durationMs": 92024,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.21969700000000003,
+          "turns": 17,
+          "durationMs": 89941,
+          "inputTokens": 2501,
+          "cachedInputTokens": 363765,
+          "outputTokens": 6285
+        }
+      },
+      {
+        "label": "refute:p3.2",
+        "attempt": 1,
+        "durationMs": 29722,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.0658016,
+          "turns": 6,
+          "durationMs": 28004,
+          "inputTokens": 2548,
+          "cachedInputTokens": 85848,
+          "outputTokens": 1697
+        }
+      },
+      {
+        "label": "refute:p3.1",
+        "attempt": 1,
+        "durationMs": 36710,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.0811554,
+          "turns": 7,
+          "durationMs": 34894,
+          "inputTokens": 2542,
+          "cachedInputTokens": 132232,
+          "outputTokens": 2089
+        }
+      },
+      {
+        "label": "refute:p3.3",
+        "attempt": 1,
+        "durationMs": 51988,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.10521,
+          "turns": 8,
+          "durationMs": 50473,
+          "inputTokens": 2564,
+          "cachedInputTokens": 159680,
+          "outputTokens": 2912
+        }
+      },
+      {
+        "label": "refute:p1.1",
+        "attempt": 1,
+        "durationMs": 147031,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.3384224,
+          "turns": 24,
+          "durationMs": 145015,
+          "inputTokens": 2585,
+          "cachedInputTokens": 698882,
+          "outputTokens": 10063
+        }
+      },
+      {
+        "label": "critic",
+        "attempt": 1,
+        "durationMs": 240984,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.39821599999999996,
+          "turns": 21,
+          "durationMs": 239429,
+          "inputTokens": 2152,
+          "cachedInputTokens": 439660,
+          "outputTokens": 17610
+        }
+      }
+    ],
+    "intent": "excerpt"
+  }
+}

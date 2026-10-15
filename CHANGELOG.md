@@ -2,6 +2,12 @@
 
 ## Unreleased — 0.5.0
 
+Benchmarked through the runner on a four-PR sample of the fixture (#4, #7, #14, #11),
+next to the 0.4.0 plugin pass on the same PRs. Claude agents on Sonnet: 4 of 4 planted
+defects confirmed, 6 of 7 confirmed findings true, nothing on the clean PR, $16. Codex on
+its default model, `gpt-5.6-sol`: 4 of 4, 21 of 22, one pre-existing finding on the clean
+PR, 15.9M input tokens. Gemini not run: no plan. See `calibration/README.md`.
+
 - A standalone runner, `runner/review.mjs`, runs the same review with each agent as a
   headless CLI process in its own git worktree: `--agent claude`, `codex` or `gemini`,
   with `--model` choosing the model within the vendor. It prepares the pull request or
@@ -15,7 +21,11 @@
 - Agents' worktrees may start at the commit under review, not only on main; the
   prompt says so. Codex's sandbox keeps `.git` read-only, so the agent's own checkout
   cannot be relied on there.
-- `calibration/bench.sh` runs a four-PR sample through the runner for one agent.
+- `calibration/bench.sh` runs a four-PR sample through the runner for one agent, and
+  `calibration/bench-table.mjs` renders result folders as the table the README carries.
+- Scorer: a ruling whose lines contain a finding's line outranks one merely within the
+  window, and a ruling may carry `finding`, a regular expression on the title, so two
+  findings on one line can be ruled apart.
 
 ## 0.4.0 — 2026-10-15
 

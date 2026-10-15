@@ -147,6 +147,51 @@ for a plugin-path folder it reads the cost from the session log beside each resu
 node calibration/bench-table.mjs --results calibration/results/0.4.0 --results calibration/results/0.5.0-codex
 ```
 
+### The 0.5.0 sample
+
+Recorded 15 October 2026: Claude agents on Sonnet, six at once, and Codex on its CLI's
+default model, three at once, each CLI at its default settings, next to the 0.4.0 plugin
+pass (Sonnet agents) on the same PRs. Minutes are wall-clock per PR. The plugin's
+dollars are the session's `total_cost_usd`, which includes the Opus session that ran the
+review; the runner's are the agents' alone, and Codex reports tokens, not dollars.
+
+**0.4.0**: plugin path, Sonnet agents
+
+| PR | Planted | Other confirmed findings | Agents | Calls | Minutes | Cost |
+| :- | :- | :- | -: | -: | -: | :- |
+| #4 | D4 ✓ | — | 12 | — | 23 | $5.51 |
+| #7 | D7 ✓, D8 ✓ | — | 20 | — | 19 | $5.77 |
+| #11 | clean; none reported | — | 4 | — | 17 | $2.47 |
+| #14 | D13 ✓ | 2 true | 18 | — | 34 | $9.15 |
+
+**0.5.0-claude**: claude agents on claude-sonnet-5 (2.1.267 (Claude Code), 6 at once)
+
+| PR | Planted | Other confirmed findings | Agents | Calls | Minutes | Cost |
+| :- | :- | :- | -: | -: | -: | :- |
+| #4 | D4 ✓ | — | 10 | 10 | 16 | $3.02 |
+| #7 | D7 ✓, D8 ✓ | — | 19 | 19 | 15 | $3.94 |
+| #11 | clean; none reported | — | 6 | 6 | 7 | $1.50 |
+| #14 | D13 ✓ | 1 true, 1 false | 20 | 20 | 30 | $7.48 |
+
+**0.5.0-codex**: codex agents on gpt-5.6-sol (codex-cli 0.153.4, 3 at once)
+
+| PR | Planted | Other confirmed findings | Agents | Calls | Minutes | Cost |
+| :- | :- | :- | -: | -: | -: | :- |
+| #4 | D4 ✓ | 1 true, 3 pre-existing | 18 | 18 | 11 | 4.5M in (89% cached), 72k out |
+| #7 | D7 ✓, D8 ✓ | 5 true, 1 pre-existing | 18 | 18 | 15 | 4.6M in (90% cached), 108k out |
+| #11 | clean; 1 reported | 1 pre-existing | 6 | 6 | 5 | 1.6M in (90% cached), 24k out |
+| #14 | D13 ✓ | 5 true, 1 false, 1 pre-existing | 19 | 19 | 15 | 5.3M in (90% cached), 123k out |
+
+Every agent of every run answered in shape: no retries, no failed or timed-out calls, no
+run incomplete. Codex's extra findings are the rollout-window and timer hazards on #14,
+the cutover double credit of migration 004, and the name-check and sign-in-warning gaps
+on #7; its one false finding, that a failed hourly save leaves the credit only in memory,
+describes how every write in the service works. Claude's one false finding, that the
+hourly loop blocks the event loop, describes the same thing. The finding Claude found and
+then refuted on #14, the previous release's writes stripping `lastAccruedOn`, is the one
+the 0.4.0 pass confirmed (true, narrow). The one pre-existing finding on the clean PR,
+CSV cells with a bare carriage return, is true about main and is now K5.
+
 ## What the numbers mean
 
 Recall is over planted defects: the review was told nothing about them, and the PRs

@@ -1,0 +1,11 @@
+adv-review: PR #11 at be23305b — COMPLETE
+Confirmed: none.
+
+The critic names 3 gap(s), unverified:
+- The new `currency` column is inserted in the middle of the row (`id,fromId,toId,amountCents,currency,memo,createdAt`), renumbering `memo` and `createdAt`, instead of being appended at the end.
+- Exports are rewritten only when `/accounts/:id/export` is re-called for that specific account, so any account not re-exported after this deploy keeps its old 6-column CSV on disk indefinitely; the `exports/` directory can end up with a silent mix of 6- and 7-column files with no version marker.
+- `publicTransfer` in src/serialize.js (used by `GET /accounts/:id/transfers`) still omits `currency`, so the JSON view of an account's transfers and the CSV export of the same transfers now disagree on which fields describe a transfer.
+
+Agents: 6 of 20 — 1 scout, 4 finder(s), 0 triage, 0 same-site, 0 skeptic(s), 1 critic.
+Angles: correctness, tests-that-dont-test, boundary-contract, csv-value-correctness-for-non-enum-currency; dropped migrations-and-rollout, authz-and-attribution, silent-drops, security, data-integrity.
+Runner: claude (claude-sonnet-5, 2.1.267 (Claude Code)), 6 call(s), 7 min $1.50.

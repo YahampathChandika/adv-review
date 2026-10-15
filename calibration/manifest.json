@@ -687,6 +687,20 @@
         }
       ],
       "note": "On main since the first commit: save() names its temp file from the process id alone, so two requests saving at once write the same temp file and race on the rename; one can fail or publish the other's half-written content. Found, and marked pre-existing, by the 0.4.0 review of #8."
+    },
+    {
+      "id": "K5",
+      "title": "CSV cells with a bare carriage return are not quoted",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "lines": [
+            5,
+            8
+          ]
+        }
+      ],
+      "note": "True about main: csvCell quotes a cell for a comma, a quote or a newline, not for a lone carriage return, and a memo may carry one (any string of at most 140 characters), so an export can carry a row a reader splits in two. Reported pre-existing by the Codex benchmark on the clean PR #11."
     }
   ],
   "adjudicated": [
@@ -970,9 +984,17 @@
             164,
             164
           ]
+        },
+        {
+          "file": "src/server.js",
+          "lines": [
+            162,
+            162
+          ]
         }
       ],
-      "note": "True, narrow. Before the PR an idle copy never wrote; the timer now saves every hour whether or not anything changed, so during the two-copy window docs/deploy.md describes, an idle copy overwrites the other copy's writes with its stale state. It extends the README's known one-process limitation rather than creating a new class, and it is confined to the deploy window: high overstates it. The Codex benchmark reported the same-process race at line 164: the timer's save and a request handler's save can overlap, both writing the one temporary file `<file>.<pid>.tmp` before renaming it, so one rename can move a file the other is still writing. Same hazard, true."
+      "note": "True, narrow. Before the PR an idle copy never wrote; the timer now saves every hour whether or not anything changed, so during the two-copy window docs/deploy.md describes, an idle copy overwrites the other copy's writes with its stale state. It extends the README's known one-process limitation rather than creating a new class, and it is confined to the deploy window: high overstates it. The Codex benchmark reported the same-process race at line 164: the timer's save and a request handler's save can overlap, both writing the one temporary file `<file>.<pid>.tmp` before renaming it, so one rename can move a file the other is still writing. Same hazard, true. The Claude-via-runner benchmark reported it at line 162 as well; `finding` keeps this ruling to the race findings at these lines.",
+      "finding": "race|clobber|concurrent"
     },
     {
       "pr": 14,
@@ -1221,6 +1243,22 @@
         }
       ],
       "note": "False. The store is one in-memory object written whole: after a failed save, memory stays ahead of disk until the next save, from the next request or the next hour, exactly as for every request handler's write. If the process dies first, the credit and its marker are lost together and the next run credits again. A design observation about the service, not a defect of the PR. Reported by the Codex benchmark; `finding` keeps this ruling off the race reported at the same line."
+    },
+    {
+      "pr": 14,
+      "truth": false,
+      "title": "Hourly job blocks event loop under load",
+      "finding": "blocks event loop",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            162,
+            162
+          ]
+        }
+      ],
+      "note": "False. The ledger is one process over an in-memory JSON store, and everything it does is synchronous on the event loop: every route scans or updates the store inline, and every save serialises the whole file. The hourly loop costs microseconds per account, less than the save that follows it and that every request already pays. A design observation about the service, not a defect of the PR. Reported by the Claude-via-runner benchmark."
     }
   ],
   "bases": {

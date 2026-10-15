@@ -1,0 +1,26 @@
+adv-review: PR #4 at 88d0e534 — COMPLETE
+Confirmed (2):
+- [HIGH] src/store.js:12 (6 sites) Schema silently drops overdraft limits (corrected)
+  The accounts schema omits `overdraftCents`, so both account creation and limit updates silently discard the field.
+  failure: For a newly opened zero-balance account, POST /accounts/:id/overdraft with an administrator token and {"overdraftCents":500} returns 200 but neither stores nor returns 500; GET reports 0, the saved JSON lacks overdraftCents, and a subsequent 100-cent transfer returns 409 "insufficient funds".
+- [MEDIUM] src/server.js:92 Null overdraft body returns 500 (corrected)
+  The new route dereferences `body.overdraftCents` without ensuring the parsed JSON body is an object.
+  failure: An authenticated administrator posting literal JSON `null` to `/accounts/:id/overdraft` receives a 500 internal-error response instead of a 400 validation response.
+
+Pre-existing, not this change's doing (3):
+- [HIGH] src/server.js:102 Failed writes remain applied (corrected)
+  Handlers mutate the shared in-memory store before awaiting save and never roll back when persistence fails.
+  failure: For an authenticated admin depositing 100 cents into an open account at balance 0, if Store.save() throws after deposit() mutates memory, POST /deposits returns 500 but the shared in-memory balance remains 100 and is returned by GET. Retrying deposits another 100 and successfully persists 200 rather than the intended 100.
+- [HIGH] src/store.js:64 Concurrent saves share temporary file (corrected)
+  Every in-process save uses the same PID-based temporary pathname, so overlapping requests race to rename one file and one valid write fails ambiguously.
+  failure: Two overlapping deposits can both mutate and persist the shared in-memory state, but one request receives 500 when its rename finds that the shared temporary path has already been renamed. Retrying that apparently failed deposit applies it a second time.
+- [HIGH] src/store.js:65 Whole-file saves lose concurrent updates (corrected)
+  Independent Store instances serialize stale full-file snapshots without locking or conflict detection, allowing the last save to erase another process's committed account mutation.
+  failure: If one store saves an update to account A and then an independently opened stale store saves an update to account B, the latter whole-file write restores A's old value and loses the first committed update.
+
+The critic names 1 gap(s), unverified:
+- README.md's role matrix still says administrators only add deposit authority to member capabilities, omitting their new authority to set any account's overdraft limit and contradicting the endpoint table.
+
+Agents: 18 of 20 — 1 scout, 7 finder(s), 1 triage, 1 same-site, 7 skeptic(s), 1 critic.
+Angles: silent-drops, tests-that-dont-test, boundary-contract, migrations-and-rollout, correctness, data-integrity, authz-and-attribution; dropped security.
+Runner: codex (gpt-5.6-sol, codex-cli 0.153.4), 18 call(s), 11 min 4534226 tokens.

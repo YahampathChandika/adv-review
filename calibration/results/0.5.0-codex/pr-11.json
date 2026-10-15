@@ -1,0 +1,217 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "be23305b3c846e94b25272aaabde16aa55e3fc21",
+  "target": {
+    "prs": [
+      11
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "silent-drops",
+      "why": "The diff adds no store mutation or schema key. account.currency is already retained by SCHEMA, populated by account creation or migration 002, read directly from the authorized account, and written directly by writeFile without an intermediate validator or ORM that could discard it."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "No entry point or write attribution changes. The existing export route requires authentication and resolves the account through getOwnAccount before any directory or file operation, while currency is already part of the account's public API shape."
+    },
+    {
+      "title": "security",
+      "why": "The added value comes from the server-side account object, is restricted to the existing currency enum or migration default, and passes through the existing CSV escaping function. The diff adds no input surface, secret exposure, redirect, query construction, third-party transmission, or broader access."
+    },
+    {
+      "title": "data-integrity",
+      "why": "The ledger remains read-only during export, and the complete CSV contents are assembled synchronously before filesystem awaits. Existing same-account filename replacement behavior is unchanged, and the new column introduces no retry, cache, or multi-store state transition."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "This PR changes neither schema nor migrations. Currency storage and the additive backfill already exist on the parent revision, and production startup runs pending migrations before accepting requests."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The PR adds a currency column after amountCents to the account-transfer CSV header and fills each row from the exported account's currency. It updates the route documentation and adds an HTTP integration test using an NZD transfer with a quoted memo.",
+  "confirmed": [
+    {
+      "title": "Bare carriage returns split CSV rows",
+      "file": "src/export.js",
+      "line": 7,
+      "category": "correctness",
+      "severity": "medium",
+      "rootCause": "The CSV encoder does not quote fields containing a lone carriage return, so an allowed memo can corrupt the exported record structure.",
+      "summary": "The CSV encoder does not quote fields containing a lone carriage return, so an allowed memo can corrupt the exported record structure.",
+      "failure": "A valid transfer whose memo is \"first\\rsecond\" exports an unquoted carriage return. A standard CSV reader splits that transfer into a six-column row ending at \"first\" and a two-column row beginning with \"second\", corrupting the record structure.",
+      "sites": [
+        {
+          "file": "src/export.js",
+          "line": 7,
+          "title": "Bare carriage returns split CSV rows"
+        }
+      ],
+      "foundBy": [
+        "correctness"
+      ],
+      "preexisting": true,
+      "verdict": "CONFIRMED",
+      "reasoning": "Confirmed end to end through the HTTP API. POST /transfers accepted memo \"first\\rsecond\" with status 201 and preserved the carriage return; POST /accounts/:id/export returned 200. src/export.js quotes only fields matching /[\",\\n]/, so the resulting CSV contained AUD,first\\rsecond without quotes. Python's csv.reader parsed it as a six-field transfer row followed by a two-field row rather than one seven-field row. The full test suite passed, but no test covers a lone carriage return. HEAD^ has the same csvCell implementation, confirming the defect is pre-existing rather than introduced by this diff.",
+      "verifiedBy": [
+        "refute:1"
+      ],
+      "corrected": true
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "src/export.js:19 leaves an empty account's export with only the `currency` header and no currency value, so an empty statement is not readable on its own as promised.",
+      "why": "The tests split the contract across cases: the empty-export test checks only the header, while the currency-value test always creates a transfer."
+    },
+    {
+      "what": "src/export.js:19 exports a blank currency for accounts created without that field after migration 002 has already run.",
+      "why": "The migration angle considered only startup backfill. The documented rolling-deploy window permits an older process to write a currency-less account after version 2 is recorded, so the migration will not run again and `account.currency` remains undefined."
+    }
+  ],
+  "counts": {
+    "raw": 1,
+    "rootCauses": 1,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 1,
+    "downgraded": 0,
+    "preexisting": 1,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 6,
+    "scout": 1,
+    "finders": 3,
+    "triage": 0,
+    "sameSite": 0,
+    "skeptics": 1,
+    "critic": 1,
+    "retries": 0
+  },
+  "runner": {
+    "version": "0.5.0",
+    "agent": "codex",
+    "model": "gpt-5.6-sol",
+    "cliVersion": "codex-cli 0.153.4",
+    "jobs": 3,
+    "startedAt": "2026-10-15T09:02:34.184Z",
+    "elapsedMs": 308054,
+    "cost": {
+      "usd": null,
+      "inputTokens": 1567850,
+      "cachedInputTokens": 1407488,
+      "outputTokens": 24379
+    },
+    "calls": [
+      {
+        "label": "scout",
+        "attempt": 1,
+        "durationMs": 75083,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 239549,
+          "cachedInputTokens": 215168,
+          "outputTokens": 4605
+        }
+      },
+      {
+        "label": "find:tests-that-dont-test",
+        "attempt": 1,
+        "durationMs": 43122,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 167695,
+          "cachedInputTokens": 150656,
+          "outputTokens": 1895
+        }
+      },
+      {
+        "label": "find:boundary-contract",
+        "attempt": 1,
+        "durationMs": 79267,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 345630,
+          "cachedInputTokens": 317952,
+          "outputTokens": 4220
+        }
+      },
+      {
+        "label": "find:correctness",
+        "attempt": 1,
+        "durationMs": 84387,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 285819,
+          "cachedInputTokens": 259200,
+          "outputTokens": 4908
+        }
+      },
+      {
+        "label": "refute:1",
+        "attempt": 1,
+        "durationMs": 55205,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 147186,
+          "cachedInputTokens": 115072,
+          "outputTokens": 3212
+        }
+      },
+      {
+        "label": "critic",
+        "attempt": 1,
+        "durationMs": 93051,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": null,
+          "inputTokens": 381971,
+          "cachedInputTokens": 349440,
+          "outputTokens": 5539
+        }
+      }
+    ],
+    "intent": "excerpt"
+  }
+}

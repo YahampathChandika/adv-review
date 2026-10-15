@@ -1,0 +1,209 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "be23305b3c846e94b25272aaabde16aa55e3fc21",
+  "target": {
+    "prs": [
+      11
+    ]
+  },
+  "angles": [
+    {
+      "title": "correctness",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "csv-value-correctness-for-non-enum-currency",
+      "source": "scout"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "migrations-and-rollout",
+      "why": "No migration file, no store SCHEMA change, no deploy-order dependency. `account.currency` was already added to the store schema and backfilled by migration 002 in a prior PR; this diff only reads that existing field into a CSV. The CSV is a write-only artifact (nothing in the repo reads it back), so old/new code running against old/new data is not a concern here."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "No new or changed entry point. The `/accounts/:id/export` route's owner check (`getOwnAccount`) is untouched by this diff; the only change is inside `exportTransfers`, which runs after authorization already passed."
+    },
+    {
+      "title": "silent-drops",
+      "why": "`account.currency` is already in the store's `accounts` SCHEMA (src/store.js) and already serialized in src/serialize.js, both pre-existing. This diff only adds it to a CSV string built in memory and written with `writeFile` — there is no intermediate store/schema layer that could strip it before this write."
+    },
+    {
+      "title": "security",
+      "why": "No injection surface changes: currency values are drawn from the fixed `CURRENCIES` enum (src/accounts.js), never free text, and go through the same `csvCell` quoting as before. No secrets, redirects, CORS, or third-party calls touched."
+    },
+    {
+      "title": "data-integrity",
+      "why": "No new concurrent-write or cache-invalidation path. `exportTransfers` writes a single file with plain `writeFile` exactly as before; this diff only changes the string content built before that call, not the write mechanics or any shared state."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "The diff adds a `currency` column (from `account.currency`) to the CSV export between `amountCents` and `memo`, updating the header and every row accordingly, plus a README line and two tests. It touches no schema, no route, no authz check, and no migration — it only changes what is written into a per-request, write-only CSV string.",
+  "confirmed": [],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "The new `currency` column is inserted in the middle of the row (`id,fromId,toId,amountCents,currency,memo,createdAt`), renumbering `memo` and `createdAt`, instead of being appended at the end.",
+      "why": "Every angle that ran treated the CSV as an internal, write-only artifact ('nothing in the repo reads it back') and judged it by in-repo correctness and quoting alone. But this file exists to be read by something outside the repo (the PR's own framing is 'a statement is readable on its own'), and the repo's stated deploy philosophy of additive, reader-tolerant changes (docs/deploy.md) is never applied to this artifact. A positional parser built against the old 6-column file now silently reads `memo` out of the `createdAt` slot and vice versa. No angle's scope covers 'is this output a contract with an external reader,' so it was structurally invisible to all of them."
+    },
+    {
+      "what": "Exports are rewritten only when `/accounts/:id/export` is re-called for that specific account, so any account not re-exported after this deploy keeps its old 6-column CSV on disk indefinitely; the `exports/` directory can end up with a silent mix of 6- and 7-column files with no version marker.",
+      "why": "The scout's migrations-and-rollout angle was scoped to the JSON store/schema ('no migration file, no store SCHEMA change') and reasoned the CSV is write-only so old/new code vs. data isn't a concern. That reasoning covers whether the app can read its own store, not whether the export directory accumulated over the service's lifetime now contains inconsistent files for whoever reads them later. That is a rollout property of a different artifact (the exported files) that no angle was pointed at."
+    },
+    {
+      "what": "`publicTransfer` in src/serialize.js (used by `GET /accounts/:id/transfers`) still omits `currency`, so the JSON view of an account's transfers and the CSV export of the same transfers now disagree on which fields describe a transfer.",
+      "why": "Each angle examined either the CSV path (export.js) or the store/schema in isolation; none compared the two representations of 'the account's transfers' the API now exposes side by side, since that comparison spans export.js and serialize.js rather than sitting inside either file's diff. No test asserts an expected key set for `publicTransfer`, so nothing flags the two views drifting apart."
+    }
+  ],
+  "counts": {
+    "raw": 0,
+    "rootCauses": 0,
+    "merged": 0,
+    "confirmed": 0,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 6,
+    "scout": 1,
+    "finders": 4,
+    "triage": 0,
+    "sameSite": 0,
+    "skeptics": 0,
+    "critic": 1,
+    "retries": 0
+  },
+  "runner": {
+    "version": "0.5.0",
+    "agent": "claude",
+    "model": "claude-sonnet-5",
+    "cliVersion": "2.1.267 (Claude Code)",
+    "jobs": 6,
+    "startedAt": "2026-10-15T09:31:43.065Z",
+    "elapsedMs": 447274,
+    "cost": {
+      "usd": 1.4978014,
+      "inputTokens": 13598,
+      "cachedInputTokens": 2297507,
+      "outputTokens": 48479
+    },
+    "calls": [
+      {
+        "label": "scout",
+        "attempt": 1,
+        "durationMs": 130754,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.2814656,
+          "turns": 20,
+          "durationMs": 129178,
+          "inputTokens": 3006,
+          "cachedInputTokens": 394103,
+          "outputTokens": 8703
+        }
+      },
+      {
+        "label": "find:tests-that-dont-test",
+        "attempt": 1,
+        "durationMs": 59844,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.15929240000000003,
+          "turns": 14,
+          "durationMs": 57947,
+          "inputTokens": 2059,
+          "cachedInputTokens": 257537,
+          "outputTokens": 4819
+        }
+      },
+      {
+        "label": "find:boundary-contract",
+        "attempt": 1,
+        "durationMs": 96550,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.2111042,
+          "turns": 20,
+          "durationMs": 94889,
+          "inputTokens": 2210,
+          "cachedInputTokens": 330576,
+          "outputTokens": 6323
+        }
+      },
+      {
+        "label": "find:correctness",
+        "attempt": 1,
+        "durationMs": 105122,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.23254900000000003,
+          "turns": 20,
+          "durationMs": 103425,
+          "inputTokens": 2131,
+          "cachedInputTokens": 349895,
+          "outputTokens": 7269
+        }
+      },
+      {
+        "label": "find:csv-value-correctness-for-non-enum-currency",
+        "attempt": 1,
+        "durationMs": 114158,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.23527559999999997,
+          "turns": 17,
+          "durationMs": 112463,
+          "inputTokens": 2086,
+          "cachedInputTokens": 441058,
+          "outputTokens": 6975
+        }
+      },
+      {
+        "label": "critic",
+        "attempt": 1,
+        "durationMs": 202041,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.37811459999999997,
+          "turns": 25,
+          "durationMs": 200389,
+          "inputTokens": 2106,
+          "cachedInputTokens": 524338,
+          "outputTokens": 14390
+        }
+      }
+    ],
+    "intent": "excerpt"
+  }
+}

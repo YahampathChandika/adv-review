@@ -1,0 +1,319 @@
+{
+  "status": "complete",
+  "incomplete": [],
+  "headSha": "88d0e534ac12020b2a6f616da97efb8b360d5676",
+  "target": {
+    "prs": [
+      4
+    ]
+  },
+  "angles": [
+    {
+      "title": "silent-drops",
+      "source": "fixed"
+    },
+    {
+      "title": "boundary-contract",
+      "source": "fixed"
+    },
+    {
+      "title": "tests-that-dont-test",
+      "source": "fixed"
+    },
+    {
+      "title": "end-to-end overdraft enforcement",
+      "source": "scout"
+    }
+  ],
+  "projectAngles": [],
+  "droppedAngles": [
+    {
+      "title": "correctness",
+      "why": "Read accounts.js and transfers.js directly: the overdraftCents guard (Number.isInteger && >=0) is sound, setOverdraft's existence-before-closed ordering mirrors closeAccount's, canCover's inequality (balanceCents + overdraftCents >= amountCents) is the right direction, and openAccount's inserted object always hardcodes overdraftCents: 0 regardless of what a client puts in the POST /accounts body (the destructured params ignore it), so there's no client-controlled override. No logic defect independent of the storage question, which is covered by silent-drops/boundary-contract instead."
+    },
+    {
+      "title": "authz-and-attribution",
+      "why": "The new route reuses the existing requireRole('admin', ...) wrapper verbatim, identical to the already-shipped /deposits route; requireRole runs before setOverdraft's body executes, so there is no path to the write without the check firing. record(store, admin.id, 'account.overdraft', accountId) attributes the write to the acting admin, not the account owner. The added HTTP test already exercises 403 for a member and 200 for an admin on this exact route, so this is not a new or unverified guard."
+    },
+    {
+      "title": "security",
+      "why": "No string interpolation into SQL/HTML/shell/URL, no secret or token handling, no third-party call, and no CORS/redirect change. The one new input (overdraftCents) is a bounded non-negative integer validated before use; there's no injection or exfiltration surface in this diff."
+    },
+    {
+      "title": "data-integrity",
+      "why": "The new route follows the exact single-request read-then-store.update()-then-save() pattern already used by deposit/transfer/close — no new concurrent-write window. One audit row per call matches the existing audit growth rate for every other write in the codebase; nothing here is unbounded or newly non-idempotent."
+    },
+    {
+      "title": "migrations-and-rollout",
+      "why": "Migration 003 only sets overdraftCents when it is undefined (idempotent), runs strictly after 001/002 by filename sort, and a test reruns migrate() afterward and gets back []. It is additive-only with no companion removal, matching docs/deploy.md's 'additive first' rule. The actual rollout risk this PR creates is a SCHEMA omission for future writes, not a defect in the migration file itself — that's covered under silent-drops/boundary-contract."
+    }
+  ],
+  "notRun": [],
+  "failedAngles": [],
+  "retried": [],
+  "baseline": {
+    "ran": true,
+    "command": "npm run check && npm test",
+    "failures": []
+  },
+  "scoutNotes": "Adds an admin-only POST /accounts/:id/overdraft endpoint and an overdraftCents field on accounts, threading it into transfers.js's balance check via a new canCover() helper, with migration 003 backfilling existing accounts to 0. The change touches the account row's storage shape in src/store.js (SCHEMA/pick), its public serialization in serialize.js, and the transfer authorization arithmetic in transfers.js.",
+  "confirmed": [
+    {
+      "title": "overdraftCents stripped by store's SCHEMA allow-list",
+      "file": "src/store.js",
+      "line": 12,
+      "category": "correctness",
+      "severity": "critical",
+      "rootCause": "SCHEMA.accounts (src/store.js:12) was never extended with 'overdraftCents', so pick() silently strips the field on every store.insert()/store.update() call — making the overdraft-limit feature a persisted-nowhere no-op despite returning 200 — and the only new test (test/server.test.js, 'only an administrator sets an overdraft limit') checks only HTTP status codes and never inspects the response body or re-reads the account, so it cannot catch this.",
+      "summary": "SCHEMA.accounts (src/store.js:12) was never extended with 'overdraftCents', so pick() strips the field from every store.insert()/store.update() call, making the whole overdraft feature a no-op even though it reports success.",
+      "failure": "Call POST /accounts/:id (open), then POST /accounts/:id/overdraft {overdraftCents: 500} as an admin: the route returns 200 with a `setOverdraft()`-returned row, but that row passed through `store.update('accounts', id, {overdraftCents, updatedAt})` -> `pick('accounts', ...)` (src/store.js:84-90, 18-24), which drops overdraftCents because it is absent from SCHEMA.accounts. `publicAccount(updated)` (src/serialize.js:15) then falls back to `a.overdraftCents ?? 0` and serialises overdraftCents: 0 in the HTTP response body, even though the admin just set 500 and got a 200. I reproduced this directly: calling `setOverdraft()` and then `store.get('accounts', id)` shows the stored row has no `overdraftCents` key at all (reread.overdraftCents === undefined). Worse, `canCover()` (src/transfers.js:8) reads `from.overdraftCents ?? 0` on the same stripped row, so `canCover(reread, 300)` returns false — a transfer that should be covered by the configured 500-cent limit is still rejected with 409 'insufficient funds'. The limit the admin configured, and that the API claims was set, never takes effect for any account, and every subsequent read (API response or internal transfer check) reports 0 regardless of what was written. The same SCHEMA gap also silently drops the overdraftCents:0 written by openAccount's store.insert(), though that is masked by serialize.js's `?? 0` default. The new test 'only an administrator sets an overdraft limit' (test/server.test.js) only asserts HTTP status codes (403/400/200) and never inspects the response body's overdraftCents, so it passes without exercising the actual (broken) value; the full suite (`npm test`) is green despite the feature being completely inert.",
+      "sites": [
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents stripped by store's SCHEMA allow-list"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "overdraftCents missing from store SCHEMA; feature inert"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Overdraft limit never persists; feature is inert"
+        },
+        {
+          "file": "src/store.js",
+          "line": 12,
+          "title": "Overdraft limit silently never persisted"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 146,
+          "title": "New test asserts status only, missing persistence check"
+        },
+        {
+          "file": "test/server.test.js",
+          "line": 146,
+          "title": "Overdraft test never checks persisted value"
+        }
+      ],
+      "foundBy": [
+        "silent-drops",
+        "boundary-contract",
+        "tests-that-dont-test",
+        "end-to-end overdraft enforcement"
+      ],
+      "preexisting": false,
+      "verdict": "CONFIRMED",
+      "reasoning": "Read src/store.js:10-24 and confirmed SCHEMA.accounts does not include 'overdraftCents'; pick() therefore drops the key on every insert() and update(). I reproduced the full chain end-to-end: (1) a unit-level script showed openAccount's inserted row and setOverdraft's updated row both lack the overdraftCents key after going through the store, and store.get() reread confirms the same; (2) an HTTP-level repro using the project's own test/helpers.js serve()/call() showed POST /accounts/:id/overdraft {overdraftCents:500} returns 200 with body.overdraftCents === 0 (serialize.js's `?? 0` fallback masking the drop), exactly as the claim describes; (3) a follow-up transfer of 300 cents from an account with balance 0 and a configured 500-cent overdraft limit was rejected with 409 'insufficient funds', confirming canCover() in src/transfers.js reads the stripped (undefined->0) overdraftCents. I also confirmed the new test in test/server.test.js only asserts response.status (403/400/200) and never touches response.body, so it cannot and does not catch this — `npm test` passes all 24 tests despite the feature being completely inert. SCHEMA.accounts is unchanged by this diff (only accounts.js, serialize.js, server.js, transfers.js, migrations, and tests were touched), so the feature was added without ever extending the allow-list it depends on, making this correctly attributed as introduced by this diff.",
+      "verifiedBy": [
+        "refute:p1.1",
+        "refute:p1.2",
+        "refute:p1.3"
+      ],
+      "panel": "3 of 3 skeptics could not refute it"
+    }
+  ],
+  "refuted": [],
+  "unverified": [],
+  "missed": [
+    {
+      "what": "setOverdraft's audit trail is completely unverified by any test. Every other mutating function (openAccount, closeAccount, transfer, deposit) has a test asserting entriesFor(store, id) contains the right action/actorId, but no test anywhere — not accounts.test.js, not server.test.js — checks that 'account.overdraft' is actually recorded, or recorded under the admin's id. I confirmed this concretely: renaming the action string in record(store, admin.id, 'account.overdraft', accountId) to a typo still leaves all 24 tests green (node --test, 24 pass/0 fail). README states 'every write is audited under the user who made it' as a system-wide invariant, and this write silently has no test enforcing that promise.",
+      "why": "correctness/authz/data-integrity angles treat the audit call as a trivial, already-covered pattern (same record() used by deposit/close) and don't re-verify each call site's actual coverage; tests-that-dont-test and silent-drops angles converged on the one eye-catching bug (overdraftCents vanishing via SCHEMA) and didn't need to look past it to notice a second, independent, and unrelated test-coverage hole in the same function."
+    }
+  ],
+  "counts": {
+    "raw": 6,
+    "rootCauses": 1,
+    "merged": 0,
+    "confirmed": 1,
+    "plausible": 0,
+    "corrected": 0,
+    "downgraded": 0,
+    "preexisting": 0,
+    "refuted": 0,
+    "dismissedAsUnsure": 0,
+    "unverified": 0
+  },
+  "budget": {
+    "ceiling": 20,
+    "used": 10,
+    "scout": 1,
+    "finders": 4,
+    "triage": 1,
+    "sameSite": 0,
+    "skeptics": 3,
+    "critic": 1,
+    "retries": 0
+  },
+  "runner": {
+    "version": "0.5.0",
+    "agent": "claude",
+    "model": "claude-sonnet-5",
+    "cliVersion": "2.1.267 (Claude Code)",
+    "jobs": 6,
+    "startedAt": "2026-10-15T08:30:47.732Z",
+    "elapsedMs": 972404,
+    "cost": {
+      "usd": 3.023884399999999,
+      "inputTokens": 25689,
+      "cachedInputTokens": 4239462,
+      "outputTokens": 108437
+    },
+    "calls": [
+      {
+        "label": "scout",
+        "attempt": 1,
+        "durationMs": 233381,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.3714534,
+          "turns": 18,
+          "durationMs": 231666,
+          "inputTokens": 3057,
+          "cachedInputTokens": 343952,
+          "outputTokens": 18761
+        }
+      },
+      {
+        "label": "find:tests-that-dont-test",
+        "attempt": 1,
+        "durationMs": 94109,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.25227279999999996,
+          "turns": 14,
+          "durationMs": 92445,
+          "inputTokens": 2260,
+          "cachedInputTokens": 384644,
+          "outputTokens": 8403
+        }
+      },
+      {
+        "label": "find:silent-drops",
+        "attempt": 1,
+        "durationMs": 110526,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.2355774,
+          "turns": 14,
+          "durationMs": 109010,
+          "inputTokens": 2276,
+          "cachedInputTokens": 376247,
+          "outputTokens": 7715
+        }
+      },
+      {
+        "label": "find:boundary-contract",
+        "attempt": 1,
+        "durationMs": 119085,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.28039519999999996,
+          "turns": 17,
+          "durationMs": 117527,
+          "inputTokens": 2254,
+          "cachedInputTokens": 450856,
+          "outputTokens": 8817
+        }
+      },
+      {
+        "label": "find:end-to-end overdraft enforcement",
+        "attempt": 1,
+        "durationMs": 132293,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.31842839999999994,
+          "turns": 19,
+          "durationMs": 130741,
+          "inputTokens": 2117,
+          "cachedInputTokens": 444497,
+          "outputTokens": 10581
+        }
+      },
+      {
+        "label": "triage",
+        "attempt": 1,
+        "durationMs": 35804,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.1627198,
+          "turns": 11,
+          "durationMs": 34570,
+          "inputTokens": 2346,
+          "cachedInputTokens": 181639,
+          "outputTokens": 2144
+        }
+      },
+      {
+        "label": "refute:p1.2",
+        "attempt": 1,
+        "durationMs": 64230,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.1632646,
+          "turns": 12,
+          "durationMs": 62930,
+          "inputTokens": 2997,
+          "cachedInputTokens": 283108,
+          "outputTokens": 3747
+        }
+      },
+      {
+        "label": "refute:p1.3",
+        "attempt": 1,
+        "durationMs": 77680,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.1845244,
+          "turns": 12,
+          "durationMs": 76347,
+          "inputTokens": 3009,
+          "cachedInputTokens": 309017,
+          "outputTokens": 4785
+        }
+      },
+      {
+        "label": "refute:p1.1",
+        "attempt": 1,
+        "durationMs": 81728,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.19507460000000001,
+          "turns": 13,
+          "durationMs": 80410,
+          "inputTokens": 2991,
+          "cachedInputTokens": 343673,
+          "outputTokens": 5037
+        }
+      },
+      {
+        "label": "critic",
+        "attempt": 1,
+        "durationMs": 488700,
+        "ok": true,
+        "reason": null,
+        "cost": {
+          "usd": 0.8601737999999999,
+          "turns": 25,
+          "durationMs": 487368,
+          "inputTokens": 2382,
+          "cachedInputTokens": 1121829,
+          "outputTokens": 38447
+        }
+      }
+    ],
+    "intent": "excerpt"
+  }
+}
