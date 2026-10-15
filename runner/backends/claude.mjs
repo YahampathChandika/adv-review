@@ -54,6 +54,20 @@ export function commandFor({ prompt, schema, model, addDirs = [], runCode = true
   return { bin: resolveBin('claude', env), args, env: {} }
 }
 
+/** The model that did the work: Claude Code also bills small helper calls to Haiku, listed first. */
+export const mainModel = (modelUsage) => {
+  let best = null
+  let most = -1
+  for (const [model, usage] of Object.entries(modelUsage ?? {})) {
+    const work = Number(usage?.outputTokens ?? 0) + Number(usage?.inputTokens ?? 0) / 100
+    if (work > most) {
+      most = work
+      best = model
+    }
+  }
+  return best
+}
+
 const tokensOf = (modelUsage) => {
   const totals = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }
   for (const usage of Object.values(modelUsage ?? {})) {
@@ -72,7 +86,7 @@ export async function run(opts) {
   const doc = lastJsonObject(r.stdout)
   if (!doc) return { ok: false, reason: `no result JSON (exit ${r.code}): ${tail(r.stderr || r.stdout)}`, raw: r }
   const cost = { usd: typeof doc.total_cost_usd === 'number' ? doc.total_cost_usd : null, turns: doc.num_turns ?? null, durationMs: doc.duration_ms ?? null, ...tokensOf(doc.modelUsage) }
-  const model = doc.modelUsage ? Object.keys(doc.modelUsage)[0] ?? null : null
+  const model = mainModel(doc.modelUsage)
   if (doc.is_error || (doc.subtype && doc.subtype !== 'success')) {
     return { ok: false, reason: `${doc.subtype ?? 'error'}${doc.result ? `: ${tail(doc.result, 200)}` : ''}`, cost, model, raw: r }
   }

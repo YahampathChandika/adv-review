@@ -120,6 +120,10 @@ calibration/bench.sh ../adv-review-calibration codex         # the Codex CLI's d
 calibration/bench.sh ../adv-review-calibration gemini
 ```
 
+`MODEL`, `JOBS` and `MAX_MIN` work as for `run.sh`; `EXTRA` adds runner flags, and
+defaults to `--network` for Codex, whose sandbox otherwise blocks the listening socket
+the fixture's HTTP tests open.
+
 The default sample is PRs #4, #7, #14 and #11: two planted defects from the first set,
 one from the second, and a clean PR. Results land in `results/0.5.0-<agent>/`, which the
 scorer's default skips (it is not a bare version), so score them explicitly:

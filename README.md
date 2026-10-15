@@ -176,12 +176,12 @@ cut the agents off from the network.
 | :- | :- | :- | :- | :- |
 | How to run | `/adv-review:review …` | `runner/review.mjs … --agent claude` | `… --agent codex` | `… --agent gemini` |
 | From inside the agent's session | yes | yes (Claude Code) | no: run from a terminal | yes |
-| Review runs | yes | yes | yes | yes, untested against a real Gemini CLI |
+| Review runs | yes | yes | yes; the bundled `codex-cli` of the ChatGPT app serves when none is on PATH | yes, untested against a real Gemini CLI |
 | Parallel agents | up to min(16, CPUs − 2) | `--jobs`, default up to 6 | `--jobs`, default 3 | `--jobs`, default 3 |
 | Worktree isolation | yes, under `.claude/worktrees` | yes, under the system temp dir | yes, temp dir | yes, temp dir |
 | Structured answers enforced | by the runtime | by the CLI (`--json-schema`) | by the CLI (`--output-schema`) | no: asked for in the prompt, checked by the runner, one retry |
 | `--no-run` enforced | by the prompt | restricted mode: read tools plus read-only git commands, everything else denied | OS sandbox, read-only | by the prompt and headless denial of unapproved tools |
-| Runs the project's tests | yes | yes | yes, sandboxed; no network unless `--network` | yes, unsandboxed |
+| Runs the project's tests | yes | yes | yes, sandboxed; no network, not even a listening socket, unless `--network` | yes, unsandboxed |
 | Posting | the session asks; `--post` | `--post` via `gh` | same | same |
 | Resume after a lost agent | yes | no: rerun | no | no |
 | Cost visibility | the session's usage | dollars per agent | tokens | tokens, partial |
@@ -327,7 +327,9 @@ worktree; that is permission-level, not operating-system, isolation, and your ma
 as exposed as with the plugin. With `--no-run` they run in Claude's restricted mode with
 only read tools and read-only git commands allowed, and everything else denied without
 asking. Codex agents run in Codex's operating-system sandbox: read-only with `--no-run`,
-otherwise writes inside the worktree and no network unless `--network`. Gemini agents
+otherwise writes inside the worktree and no network unless `--network`, which a test
+suite that listens on a port needs too. Codex also loads the skills from your own
+`.agents/skills` folders into each agent, as it does in any session. Gemini agents
 have no sandbox: `--no-run` is enforced by the prompt and by headless Gemini denying
 tools that would need approval, so pass `--no-run` for a PR you do not trust, and the
 runner refuses a repository that carries its own `.gemini/` or `.agents/` settings unless

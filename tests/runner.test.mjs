@@ -462,6 +462,12 @@ test('intent is the author\'s text, bounded and labelled as verbatim', () => {
   assert.ok(long.length < 1100 && long.endsWith('…'))
 })
 
+test("claude's reported model is the one that did the work, not the helper model listed first", () => {
+  assert.equal(claude.mainModel({ 'claude-haiku-4-5': { inputTokens: 900, outputTokens: 40 }, 'claude-sonnet-5': { inputTokens: 50_000, outputTokens: 3_000 } }), 'claude-sonnet-5')
+  assert.equal(claude.mainModel({ only: { inputTokens: 1, outputTokens: 1 } }), 'only')
+  assert.equal(claude.mainModel(undefined), null)
+})
+
 test("codex's default model is read from its config, since its events do not name one", () => {
   assert.equal(codex.defaultModelFrom('# comment\nmodel = "gpt-5.6-sol"\nmodel_reasoning_effort = "high"\n'), 'gpt-5.6-sol')
   assert.equal(codex.defaultModelFrom('[profiles.x]\n  model = "inner"\n'), 'inner')
