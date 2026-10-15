@@ -14,7 +14,7 @@ const matches = (f, entry, window) => sitesOf(f).some((s) => entry.sites.some((d
 const label = (f) => `${f.file}:${f.line} ${f.title} [${f.severity}]`
 
 /**
- * @param manifest  { repository, defects: [{ id, pr, set, angle, severity, sites: [{ file, lines: [lo, hi] }] }], clean: [{ pr, set }], known: [{ id, sites }], adjudicated: [{ pr, truth, sites }] }
+ * @param manifest  { repository, defects: [{ id, pr, set, angle, severity, sites: [{ file, lines: [lo, hi] }] }], clean: [{ pr, set }], known: [{ id, sites }], adjudicated: [{ pr, truth, sites, finding? }] }
  * @param results   [{ pr, result }] — each `result` is what the review's --out wrote
  * @param heads     { [pr]: headSha } — the PRs' current heads, when known; a result for another commit is skipped
  * @param sets      only score PRs in these sets (an entry without a set is in 'v1'); all when omitted
@@ -44,11 +44,16 @@ export function score({ manifest, results, heads = {}, window = 5, sets = null }
     // a planted match.
     // A ruling whose lines contain the finding's own line outranks one that only
     // sits within the window: two findings a few lines apart may deserve
-    // different rulings.
+    // different rulings. A ruling with `finding` (a regular expression) applies
+    // only to findings whose title matches it, and outranks one without at the
+    // same place: two findings on one line may deserve different rulings too.
     const contains = (s, f) => s.file === f.file && f.line >= s.lines[0] && f.line <= s.lines[1]
+    const applies = (a, f) => !a.finding || new RegExp(a.finding, 'i').test(f.title ?? '')
     const rulingOn = (f) => {
-      const rulings = (manifest.adjudicated ?? []).filter((a) => a.pr === pr)
-      return rulings.find((a) => a.sites.some((s) => contains(s, f))) ?? rulings.find((a) => a.sites.some((s) => near({ file: f.file, line: f.line }, s, window)))
+      const rulings = (manifest.adjudicated ?? []).filter((a) => a.pr === pr && applies(a, f))
+      const exact = rulings.filter((a) => a.sites.some((s) => contains(s, f)))
+      const nearby = rulings.filter((a) => a.sites.some((s) => near({ file: f.file, line: f.line }, s, window)))
+      return exact.find((a) => a.finding) ?? exact[0] ?? nearby.find((a) => a.finding) ?? nearby[0]
     }
     const unruled = confirmed.filter((f) => !rulingOn(f))
     const found = []

@@ -963,9 +963,16 @@
             161,
             161
           ]
+        },
+        {
+          "file": "src/server.js",
+          "lines": [
+            164,
+            164
+          ]
         }
       ],
-      "note": "True, narrow. Before the PR an idle copy never wrote; the timer now saves every hour whether or not anything changed, so during the two-copy window docs/deploy.md describes, an idle copy overwrites the other copy's writes with its stale state. It extends the README's known one-process limitation rather than creating a new class, and it is confined to the deploy window: high overstates it."
+      "note": "True, narrow. Before the PR an idle copy never wrote; the timer now saves every hour whether or not anything changed, so during the two-copy window docs/deploy.md describes, an idle copy overwrites the other copy's writes with its stale state. It extends the README's known one-process limitation rather than creating a new class, and it is confined to the deploy window: high overstates it. The Codex benchmark reported the same-process race at line 164: the timer's save and a request handler's save can overlap, both writing the one temporary file `<file>.<pid>.tmp` before renaming it, so one rename can move a file the other is still writing. Same hazard, true."
     },
     {
       "pr": 14,
@@ -978,9 +985,16 @@
             91,
             91
           ]
+        },
+        {
+          "file": "src/store.js",
+          "lines": [
+            12,
+            12
+          ]
         }
       ],
-      "note": "True, narrow. A copy of the previous release strips lastAccruedOn, a key its SCHEMA does not list, from any account it writes during the rollout; a new copy that starts from that file mid-window sees the guard empty and its hourly job credits the account a second time that day. Needs a restart inside the window: low, not high."
+      "note": "True, narrow. A copy of the previous release strips lastAccruedOn, a key its SCHEMA does not list, from any account it writes during the rollout; a new copy that starts from that file mid-window sees the guard empty and its hourly job credits the account a second time that day. Needs a restart inside the window: low, not high. The Codex benchmark reported the same mechanism at the SCHEMA line (store.js:12) as a rollback hazard: a rolled-back copy strips the key from every account it writes, and the next roll-forward credits again. Same defect, true."
     },
     {
       "pr": 15,
@@ -1146,6 +1160,67 @@
         }
       ],
       "note": "True, low. The body is parsed before requireUser runs, so a request with a bad token and a malformed body is refused with 400 and never logged as a failed sign-in, which the PR added the warning for. Found by the Codex benchmark."
+    },
+    {
+      "pr": 14,
+      "truth": true,
+      "title": "Cutover recredits already-paid accounts",
+      "sites": [
+        {
+          "file": "src/migrations/004-last-accrued.js",
+          "lines": [
+            6,
+            6
+          ]
+        }
+      ],
+      "note": "True, low; reported high. The migration marks every account as never credited, so on the cutover day an account the operator's daily job already credited is credited once more by the first hourly run: one day's interest, once per account, when the old job ran that day before the deploy. Found by the Codex benchmark."
+    },
+    {
+      "pr": 14,
+      "truth": true,
+      "title": "Restart loops prevent all accrual",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            162,
+            162
+          ]
+        }
+      ],
+      "note": "True, low; reported high. Nothing runs at start-up, so a copy that never stays up for an hour never accrues, and a restart loop or an hourly deploy cadence starves the job silently. One immediate run fixes it. Found by the Codex benchmark."
+    },
+    {
+      "pr": 14,
+      "truth": true,
+      "title": "Accrual exceptions crash the server",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            163,
+            163
+          ]
+        }
+      ],
+      "note": "True, low; reported medium. The timer callback guards only the save's rejection; a synchronous throw from accrueInterest would escape it and end the process. Nothing in accrueInterest is known to throw, so this is a missing guard rather than a failure anyone has produced. Found by the Codex benchmark."
+    },
+    {
+      "pr": 14,
+      "truth": false,
+      "title": "Failed accrual remains only in memory",
+      "finding": "only in memory",
+      "sites": [
+        {
+          "file": "src/server.js",
+          "lines": [
+            164,
+            164
+          ]
+        }
+      ],
+      "note": "False. The store is one in-memory object written whole: after a failed save, memory stays ahead of disk until the next save, from the next request or the next hour, exactly as for every request handler's write. If the process dies first, the credit and its marker are lost together and the next run credits again. A design observation about the service, not a defect of the PR. Reported by the Codex benchmark; `finding` keeps this ruling off the race reported at the same line."
     }
   ],
   "bases": {

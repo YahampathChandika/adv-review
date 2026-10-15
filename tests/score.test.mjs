@@ -109,6 +109,23 @@ test('a ruling that contains the line outranks a ruling that is merely near it',
   assert.deepEqual(r2[0].adjudicatedTrue, ['src/r.js:107 t src/r.js [high]'])
 })
 
+test('a ruling that names the finding applies only to titles that match, and outranks one that does not', () => {
+  const adjudicated = [
+    { pr: 1, truth: true, title: 'the race', sites: [{ file: 'src/r.js', lines: [161, 161] }] },
+    { pr: 1, truth: false, title: 'memory-only is the design', finding: 'only in memory', sites: [{ file: 'src/r.js', lines: [164, 164] }] },
+  ]
+  const race = { ...finding('src/r.js', 164), title: 'Hourly save races request saves' }
+  const memory = { ...finding('src/r.js', 164), title: 'Failed accrual remains only in memory' }
+  const { rows } = score({ manifest: { ...manifest, adjudicated }, results: [{ pr: 1, result: { confirmed: [race, memory] } }] })
+  assert.deepEqual(rows[0].adjudicatedTrue, ['src/r.js:164 Hourly save races request saves [high]'], 'a title the named ruling does not match falls through to the nearby ruling')
+  assert.deepEqual(rows[0].adjudicatedFalse, ['src/r.js:164 Failed accrual remains only in memory [high]'])
+  // Named and unnamed rulings on the same line: the named one wins for its title only.
+  const both = [...adjudicated, { pr: 1, truth: true, title: 'anything else here', sites: [{ file: 'src/r.js', lines: [164, 164] }] }]
+  const { rows: r2 } = score({ manifest: { ...manifest, adjudicated: both }, results: [{ pr: 1, result: { confirmed: [memory, race] } }] })
+  assert.deepEqual(r2[0].adjudicatedFalse, ['src/r.js:164 Failed accrual remains only in memory [high]'])
+  assert.deepEqual(r2[0].adjudicatedTrue, ['src/r.js:164 Hourly save races request saves [high]'])
+})
+
 test("a ruling on the finding's own site outranks a planted line among its grouped sites", () => {
   const adjudicated = [{ pr: 1, truth: false, title: 'coverage note', sites: [{ file: 'test/y.test.js', lines: [4, 4] }] }]
   const grouped = { ...finding('test/y.test.js', 4), sites: [{ file: 'test/y.test.js', line: 4 }, { file: 'src/c.js', line: 5 }] }
