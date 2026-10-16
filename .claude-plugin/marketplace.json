@@ -1,6 +1,6 @@
 {
   "name": "yahampathchandika",
-  "description": "Plugins by Yahampath Chandika: adv-review, an adversarial pull-request review for Claude Code.",
+  "description": "Plugins by Yahampath Chandika: adv-review, an adversarial pull-request review for Claude Code, Codex, Gemini and Copilot agents.",
   "owner": { "name": "Yahampath Chandika", "url": "https://github.com/YahampathChandika" },
   "plugins": [
     {
