@@ -138,11 +138,10 @@ node calibration/score.mjs --results calibration/results/0.5.0-codex
 ```
 
 Each result carries a `runner` block naming the agent, the model the CLI reported, the
-CLI version, every call with its duration and cost, and the elapsed time. A sample this
-small is indicative, not a score; it shows whether the review works at all with that
-agent and roughly what it costs. `bench-table.mjs` turns result folders into the
-Markdown table the README carries, one row per PR with the verdict and what it spent;
-for a plugin-path folder it reads the cost from the session log beside each result:
+CLI version, every call with its duration, and the elapsed time. A sample this small is
+indicative, not a score; it shows whether the review works at all with that agent and
+how long it takes. `bench-table.mjs` turns result folders into the Markdown tables
+below, one row per PR with the verdict, the agents used and the minutes:
 
 ```
 node calibration/bench-table.mjs --results calibration/results/0.4.0 --results calibration/results/0.5.0-codex
@@ -152,36 +151,34 @@ node calibration/bench-table.mjs --results calibration/results/0.4.0 --results c
 
 Recorded 15 October 2026: Claude agents on Sonnet, six at once, and Codex on its CLI's
 default model, three at once, each CLI at its default settings, next to the 0.4.0 plugin
-pass (Sonnet agents) on the same PRs. Minutes are wall-clock per PR. The plugin's
-dollars are the session's `total_cost_usd`, which includes the Opus session that ran the
-review; the runner's are the agents' alone, and Codex reports tokens, not dollars.
+pass (Sonnet agents) on the same PRs. Minutes are wall-clock per PR.
 
 **0.4.0**: plugin path, Sonnet agents
 
-| PR | Planted | Other confirmed findings | Agents | Calls | Minutes | Cost |
-| :- | :- | :- | -: | -: | -: | :- |
-| #4 | D4 ✓ | — | 12 | — | 23 | $5.51 |
-| #7 | D7 ✓, D8 ✓ | — | 20 | — | 19 | $5.77 |
-| #11 | clean; none reported | — | 4 | — | 17 | $2.47 |
-| #14 | D13 ✓ | 2 true | 18 | — | 34 | $9.15 |
+| PR | Planted | Other confirmed findings | Agents | Calls | Minutes |
+| :- | :- | :- | -: | -: | -: |
+| #4 | D4 ✓ | — | 12 | — | 23 |
+| #7 | D7 ✓, D8 ✓ | — | 20 | — | 19 |
+| #11 | clean; none reported | — | 4 | — | 17 |
+| #14 | D13 ✓ | 2 true | 18 | — | 34 |
 
 **0.5.0-claude**: claude agents on claude-sonnet-5 (2.1.267 (Claude Code), 6 at once)
 
-| PR | Planted | Other confirmed findings | Agents | Calls | Minutes | Cost |
-| :- | :- | :- | -: | -: | -: | :- |
-| #4 | D4 ✓ | — | 10 | 10 | 16 | $3.02 |
-| #7 | D7 ✓, D8 ✓ | — | 19 | 19 | 15 | $3.94 |
-| #11 | clean; none reported | — | 6 | 6 | 7 | $1.50 |
-| #14 | D13 ✓ | 1 true, 1 false | 20 | 20 | 30 | $7.48 |
+| PR | Planted | Other confirmed findings | Agents | Calls | Minutes |
+| :- | :- | :- | -: | -: | -: |
+| #4 | D4 ✓ | — | 10 | 10 | 16 |
+| #7 | D7 ✓, D8 ✓ | — | 19 | 19 | 15 |
+| #11 | clean; none reported | — | 6 | 6 | 7 |
+| #14 | D13 ✓ | 1 true, 1 false | 20 | 20 | 30 |
 
 **0.5.0-codex**: codex agents on gpt-5.6-sol (codex-cli 0.153.4, 3 at once)
 
-| PR | Planted | Other confirmed findings | Agents | Calls | Minutes | Cost |
-| :- | :- | :- | -: | -: | -: | :- |
-| #4 | D4 ✓ | 1 true, 3 pre-existing | 18 | 18 | 11 | 4.5M in (89% cached), 72k out |
-| #7 | D7 ✓, D8 ✓ | 5 true, 1 pre-existing | 18 | 18 | 15 | 4.6M in (90% cached), 108k out |
-| #11 | clean; 1 reported | 1 pre-existing | 6 | 6 | 5 | 1.6M in (90% cached), 24k out |
-| #14 | D13 ✓ | 5 true, 1 false, 1 pre-existing | 19 | 19 | 15 | 5.3M in (90% cached), 123k out |
+| PR | Planted | Other confirmed findings | Agents | Calls | Minutes |
+| :- | :- | :- | -: | -: | -: |
+| #4 | D4 ✓ | 1 true, 3 pre-existing | 18 | 18 | 11 |
+| #7 | D7 ✓, D8 ✓ | 5 true, 1 pre-existing | 18 | 18 | 15 |
+| #11 | clean; 1 reported | 1 pre-existing | 6 | 6 | 5 |
+| #14 | D13 ✓ | 5 true, 1 false, 1 pre-existing | 19 | 19 | 15 |
 
 Every agent of every run answered in shape: no retries, no failed or timed-out calls, no
 run incomplete. Codex's extra findings are the rollout-window and timer hazards on #14,
@@ -223,7 +220,7 @@ ceiling of 20. Results in `results/0.4.0/`.
 | Agents per PR | 4 to 20, mean 12.0 | 3 to 19, mean 12.7 |
 | Time per PR | 10 to 23 minutes | 13 to 35 minutes |
 
-259 agents and about 117 dollars at list price for the 21 reviews.
+259 agents for the 21 reviews.
 
 | PR | set | planted | angles run | dropped | agents | minutes | raw | root causes | upheld | refuted |
 | :- | :- | :- | -: | -: | -: | -: | -: | -: | -: | -: |
@@ -301,7 +298,6 @@ machine's default model. Results in `results/0.3.0/`.
 | On the two clean PRs | **no findings** | 3, all false |
 | Agents | 130 over 11 PRs; 3 to 18 per PR, mean 11.8 | 152; 7 to 20, mean 13.8 |
 | Time per PR | 15 to 28 minutes, mean 21 | 13 to 28, mean 21 |
-| Cost | about 55 dollars at list price, by the sessions' own cumulative figures | about 63 by the same method |
 
 | PR | planted | angles run | dropped | agents | minutes | raw | root causes | upheld | refuted |
 | :- | :- | -: | -: | -: | -: | -: | -: | -: | -: |
@@ -340,7 +336,6 @@ as the agents' model and Opus orchestrating. The result files are in `results/0.
 | On the two clean PRs | 3 confirmed findings, all false |
 | Agents | 152 over 11 PRs; 7 to 20 per PR, mean 13.8 of the ceiling of 20; no retries, no agent lost, nothing left unverified |
 | Time to result | 13 to 28 minutes per PR, mean 21 |
-| Cost | about 63 dollars at list price, by the sessions' own cumulative figures |
 
 | PR | planted | angles run | dropped | agents | minutes | raw | root causes | upheld | refuted |
 | :- | :- | -: | -: | -: | -: | -: | -: | -: | -: |

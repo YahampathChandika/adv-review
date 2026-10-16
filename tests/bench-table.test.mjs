@@ -23,7 +23,11 @@ test('a runner benchmark renders one row per result with the scorer verdict and 
     JSON.stringify({ status: 'complete', budget: { used: 18 }, confirmed: [finding('src/server.js', 92)], runner: codexRunner(18, 687_900, { usd: null, inputTokens: 4_462_161, cachedInputTokens: 3_968_384, outputTokens: 72_065 }) }),
   )
   await writeFile(path.join(dir, 'pr-11.json'), JSON.stringify({ status: 'complete', budget: { used: 4 }, confirmed: [], runner: codexRunner(4, 300_000, { usd: null, inputTokens: 1_000_000, cachedInputTokens: 500_000, outputTokens: 10_000 }) }))
-  const table = renderTable(loadBench({ resultsDir: dir, manifest }))
+  const plain = renderTable(loadBench({ resultsDir: dir, manifest }))
+  assert.ok(plain.includes('| PR | Planted | Other confirmed findings | Agents | Calls | Minutes |\n'), 'no spend column unless asked')
+  assert.ok(plain.includes('| #4 | D4 ✓ | — | 18 | 18 | 11 |\n'), plain)
+  assert.ok(!/\$|tokens|M in/.test(plain), 'no amounts without --cost')
+  const table = renderTable(loadBench({ resultsDir: dir, manifest }), { cost: true })
   const lines = table.split('\n')
   assert.equal(lines[0], `**${path.basename(dir)}**: codex agents on gpt-5.6-sol (codex-cli 0.153.4, 3 at once)`)
   assert.ok(lines.includes('| #4 | D4 ✓ | — | 18 | 18 | 11 | 4.5M in (89% cached), 72k out |'), table)
@@ -38,7 +42,7 @@ test('a plugin-path result takes its cost from the session log and its minutes f
   await writeFile(path.join(dir, 'logs', 'pr-7.jsonl'), ['{"type":"assistant"}', '{"type":"result","total_cost_usd":1.0}', 'not json', '{"type":"result","total_cost_usd":5.7728}'].join('\n'))
   await writeFile(path.join(dir, 'logs', 'progress-lane1.log'), '=== PR #7 start\n=== PR #7 done after 19 min; result: present [lane1]\n')
   assert.deepEqual(fromLogs({ pr: 7, logsDir: path.join(dir, 'logs') }), { cost: { usd: 5.7728 }, elapsedMs: 19 * 60_000 }, 'the last result line of the session is its total')
-  const table = renderTable(loadBench({ resultsDir: dir, manifest }))
+  const table = renderTable(loadBench({ resultsDir: dir, manifest }), { cost: true })
   assert.equal(table.split('\n')[0], `**${path.basename(dir)}**: plugin path`)
   assert.ok(table.includes('| #7 | D7 ✓ | 1 false (1 unruled) | 20 | — | 19 | $5.77 |'), table)
 })
@@ -53,7 +57,7 @@ test('planted cells say missed or refuted, an incomplete run is marked, and cost
       { pr: 9, result: {}, row: { pr: 9, note: 'not in the manifest — skipped' }, spent: {} },
     ],
   }
-  const table = renderTable(bench)
+  const table = renderTable(bench, { cost: true })
   assert.ok(table.includes('| #4 (incomplete) | D4 missed | — | 9 | — | — | — |'), table)
   assert.ok(table.includes('| #4 | D4 refuted | 1 true, 1 false, 1 pre-existing | 9 | 10 | 16 | $3.02 |'), table)
   assert.ok(table.includes('| #9 | not in the manifest — skipped |'), table)

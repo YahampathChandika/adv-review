@@ -4,7 +4,10 @@
 // records that under `runner`; for a plugin-path result the session log beside
 // it (`logs/pr-<n>.jsonl`) gives the cost and the progress log the minutes.
 //
-//   node calibration/bench-table.mjs --results calibration/results/0.5.0-codex [--results …] [--manifest …]
+//   node calibration/bench-table.mjs --results calibration/results/0.5.0-codex [--results …] [--manifest …] [--cost]
+//
+// The table carries the verdict, the agents and the minutes; `--cost` adds what each
+// review spent, for the maintainers' own records.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -73,19 +76,19 @@ const othersCell = (row) => {
  * One benchmark: `{ name, rows: [{ pr, result, row, spent }] }` where `row` is the
  * scorer's row and `spent` is `{ cost, elapsedMs, calls }`.
  */
-export function renderTable(bench) {
+export function renderTable(bench, { cost = false } = {}) {
   const runners = bench.rows.map((r) => r.result.runner).filter(Boolean)
   const head = runners.length
     ? `${runners[0].agent} agents on ${[...new Set(runners.map((r) => r.model))].join(', ')} (${runners[0].cliVersion ?? 'CLI version unknown'}, ${runners[0].jobs} at once)`
     : 'plugin path'
-  const out = [`**${bench.name}**: ${head}`, '', '| PR | Planted | Other confirmed findings | Agents | Calls | Minutes | Cost |', '| :- | :- | :- | -: | -: | -: | :- |']
+  const out = [`**${bench.name}**: ${head}`, '', `| PR | Planted | Other confirmed findings | Agents | Calls | Minutes |${cost ? ' Cost |' : ''}`, `| :- | :- | :- | -: | -: | -: |${cost ? ' :- |' : ''}`]
   for (const { pr, result, row, spent } of bench.rows) {
     if (!row || row.note) {
-      out.push(`| #${pr} | ${row?.note ?? 'not scored'} | | | | | |`)
+      out.push(`| #${pr} | ${row?.note ?? 'not scored'} | | | | |${cost ? ' |' : ''}`)
       continue
     }
     const status = result.status === 'complete' ? '' : ` (${result.status ?? 'status unknown'})`
-    out.push(`| #${pr}${status} | ${plantedCell(row)} | ${othersCell(row)} | ${result.budget?.used ?? '—'} | ${spent.calls ?? '—'} | ${minutes(spent.elapsedMs)} | ${costCell(spent.cost)} |`)
+    out.push(`| #${pr}${status} | ${plantedCell(row)} | ${othersCell(row)} | ${result.budget?.used ?? '—'} | ${spent.calls ?? '—'} | ${minutes(spent.elapsedMs)} |${cost ? ` ${costCell(spent.cost)} |` : ''}`)
   }
   return out.join('\n')
 }
@@ -114,8 +117,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const manifest = JSON.parse(readFileSync(values('manifest')[0] ?? path.join(here, 'manifest.json'), 'utf8'))
   const dirs = values('results')
   if (!dirs.length) {
-    console.error('usage: node calibration/bench-table.mjs --results <dir> [--results <dir>…] [--manifest <file>]')
+    console.error('usage: node calibration/bench-table.mjs --results <dir> [--results <dir>…] [--manifest <file>] [--cost]')
     process.exit(2)
   }
-  console.log(dirs.map((dir) => renderTable(loadBench({ resultsDir: dir, manifest }))).join('\n\n'))
+  const cost = argv.includes('--cost')
+  console.log(dirs.map((dir) => renderTable(loadBench({ resultsDir: dir, manifest }), { cost })).join('\n\n'))
 }

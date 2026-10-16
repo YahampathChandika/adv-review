@@ -36,9 +36,9 @@
 
 Benchmarked through the runner on a four-PR sample of the fixture (#4, #7, #14, #11),
 next to the 0.4.0 plugin pass on the same PRs. Claude agents on Sonnet: 4 of 4 planted
-defects confirmed, 6 of 7 confirmed findings true, nothing on the clean PR, $16. Codex on
-its default model, `gpt-5.6-sol`: 4 of 4, 21 of 22, one pre-existing finding on the clean
-PR, 15.9M input tokens. Gemini not run: no plan. See `calibration/README.md`.
+defects confirmed, 6 of 7 confirmed findings true, nothing on the clean PR. Codex on its
+default model, `gpt-5.6-sol`: 4 of 4, 21 of 22, one pre-existing finding on the clean
+PR. Gemini not run: no plan. See `calibration/README.md`.
 
 - A standalone runner, `runner/review.mjs`, runs the same review with each agent as a
   headless CLI process in its own git worktree: `--agent claude`, `codex` or `gemini`,

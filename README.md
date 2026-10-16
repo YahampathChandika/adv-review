@@ -209,7 +209,7 @@ pull request has no answer key, which is what the [calibration set](#calibration
 | Posting | the session asks; `--post` | `--post` via `gh` | same | same | same |
 | Resume after a lost agent | yes | no: rerun | no | no | no |
 | Cost visibility | the session's usage | dollars per agent | tokens | tokens, partial | none: silent mode reports no usage |
-| Calibration | 0.4.0: 17 of 18 on both sets; 4 of 4 on the sample, 7 of 7 true | sample: 4 of 4 planted defects, 6 of 7 findings true, $16 on Sonnet | sample: 4 of 4 planted defects, 21 of 22 findings true | not run: no Gemini plan | not run: no Copilot plan |
+| Calibration | 0.4.0: 17 of 18 on both sets; 4 of 4 on the sample, 7 of 7 true | sample: 4 of 4 planted defects, 6 of 7 findings true, Sonnet agents | sample: 4 of 4 planted defects, 21 of 22 findings true | not run: no Gemini plan | not run: no Copilot plan |
 | Status | supported | supported | experimental | experimental | experimental |
 
 Runner options beyond the skill's: `--jobs N` agents at once (per agent in a comparison, so
@@ -402,7 +402,7 @@ The same four PRs, #4, #7 and #14 with four planted defects between them and the
 clean #11, were reviewed through the runner with Claude agents on Sonnet and with Codex
 on its CLI's default model, each at its default settings, next to the 0.4.0 plugin pass
 on those PRs. Four PRs are a sample, not a score: they show that the review works with
-that agent and roughly what it costs. The per-PR tables and every ruling are in
+that agent and how long it takes. The per-PR tables and every ruling are in
 [`calibration/`](calibration/README.md#other-agents).
 
 | Four PRs: #4, #7, #14, #11 | Claude Code plugin, 0.4.0 | Claude through the runner | OpenAI Codex through the runner |
@@ -413,7 +413,6 @@ that agent and roughly what it costs. The per-PR tables and every ruling are in
 | Findings on the clean PR | none | none | one, pre-existing |
 | Agents per PR | 4 to 20 | 6 to 20 | 6 to 19 |
 | Time per PR | 17 to 34 minutes | 7 to 30 minutes | 5 to 15 minutes |
-| Cost of the four | $23, agents and the Opus session | $16, agents only | 15.9M input tokens, 90% cached; 0.33M output |
 
 Codex reported more beside the planted defects, eleven true findings about the PRs and
 one false; Claude through the runner reported one of each. One finding the 0.4.0 pass
